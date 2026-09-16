@@ -22,6 +22,14 @@ export const connectDB = async () => {
       }
     }
 
+    // In Vercel serverless environment, require MONGODB_URI and avoid spawning heavy binaries
+    if (process.env.VERCEL) {
+      if (!uri) {
+        logger.warn("Running on Vercel: Set MONGODB_URI in Vercel project environment variables (e.g. MongoDB Atlas).");
+        return;
+      }
+    }
+
     // Launch In-Memory MongoDB for effortless local development and tests
     if (!mongodInstance) {
       mongodInstance = await MongoMemoryServer.create();
