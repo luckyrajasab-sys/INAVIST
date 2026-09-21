@@ -17,7 +17,8 @@
     "authorizedDomains": [
       "localhost",
       "inavist.firebaseapp.com",
-      "inavist.web.app"
+      "inavist.web.app",
+      "inavist.vercel.app"
     ],
     "providers": {
       "emailPassword": true,
