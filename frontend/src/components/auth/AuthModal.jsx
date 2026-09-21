@@ -53,19 +53,28 @@ export const AuthModal = () => {
     setIsAuthModalOpen,
     authInitialTab,
     login,
+    loginWithGoogle,
     loginWithDemo,
     loginWithSocial,
+    sendPhoneOtp,
+    verifyPhoneOtp,
     registerIndianUser,
-    registerForeignerUser
+    registerForeignerUser,
+    resetPassword
   } = useAuth();
   const { t } = useLanguage();
   const { isDark } = useTheme();
 
-  // Current view: 'signin' | 'signup' | 'foreigner' | 'forgot'
+  // Current view: 'signin' | 'phone' | 'signup' | 'foreigner' | 'forgot'
   const [activeTab, setActiveTab] = useState("signin");
   const [loading, setLoading] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [forgotSuccess, setForgotSuccess] = useState(false);
+
+  // Phone OTP Authentication States
+  const [phoneInput, setPhoneInput] = useState("+91 ");
+  const [otpInput, setOtpInput] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
 
   // Show/Hide Password States
   const [showPassword, setShowPassword] = useState(false);
@@ -208,13 +217,47 @@ export const AuthModal = () => {
       return;
     }
     setLoading(true);
-    try {
-      await api.auth.forgotPassword(forgotEmail);
+    setAuthError(null);
+    const res = await resetPassword(forgotEmail);
+    setLoading(false);
+    if (res.success) {
       setForgotSuccess(true);
-    } catch (err) {
-      setForgotSuccess(true);
-    } finally {
-      setLoading(false);
+    } else {
+      setAuthError(res.message || "Could not send password reset email. Please verify the address.");
+    }
+  };
+
+  const handleSendOtp = async (e) => {
+    e.preventDefault();
+    setAuthError(null);
+    const cleaned = phoneInput.trim();
+    if (!cleaned || cleaned.length < 9) {
+      setAuthError("Please enter a valid mobile number with country code (e.g. +91 98765 43210).");
+      return;
+    }
+    setLoading(true);
+    const res = await sendPhoneOtp(cleaned);
+    setLoading(false);
+    if (res.success) {
+      setOtpSent(true);
+    } else {
+      setAuthError(res.message || "Failed to send SMS code. Please verify the mobile number or try again.");
+    }
+  };
+
+  const handleVerifyOtp = async (e) => {
+    e.preventDefault();
+    setAuthError(null);
+    const code = otpInput.trim();
+    if (!code || code.length < 6) {
+      setAuthError("Please enter the complete 6-digit SMS verification code.");
+      return;
+    }
+    setLoading(true);
+    const res = await verifyPhoneOtp(code, { phone: phoneInput.trim() });
+    setLoading(false);
+    if (!res.success) {
+      setAuthError(res.message || "SMS verification code was invalid or expired.");
     }
   };
 
@@ -266,6 +309,7 @@ export const AuthModal = () => {
             </div>
             <h2 style={{ fontFamily: "var(--font-heading)", fontSize: "1.45rem", fontWeight: 900, color: "var(--text-primary)", margin: "4px 0 0" }}>
               {activeTab === "signin" && "Sign In to Your Account"}
+              {activeTab === "phone" && "Mobile SMS OTP Sign-In"}
               {activeTab === "signup" && "Create Indian Citizen Account"}
               {activeTab === "foreigner" && "International Tourist Registration"}
               {activeTab === "forgot" && "Reset Your Password"}
@@ -297,15 +341,16 @@ export const AuthModal = () => {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "1fr 1fr 1.2fr",
-              gap: "6px",
+              gridTemplateColumns: "1fr 1fr 1fr 1.15fr",
+              gap: "4px",
               padding: "4px",
               borderRadius: "var(--radius-xl, 14px)",
               background: "var(--bg-tertiary)"
             }}
           >
             {[
-              { id: "signin", label: "Sign In" },
+              { id: "signin", label: "Email" },
+              { id: "phone", label: "Phone OTP 📱" },
               { id: "signup", label: "Indian Citizen" },
               { id: "foreigner", label: "Int'l Tourist 🌍" }
             ].map((tab) => {
@@ -478,7 +523,7 @@ export const AuthModal = () => {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
                 <button
                   type="button"
-                  onClick={() => loginWithSocial("Google")}
+                  onClick={loginWithGoogle}
                   style={{
                     padding: "9px 12px",
                     borderRadius: "10px",
@@ -544,7 +589,197 @@ export const AuthModal = () => {
           </form>
         )}
 
-        {/* VIEW 2: SIGN UP (INDIAN CITIZEN) */}
+        {/* VIEW: PHONE NUMBER SMS OTP */}
+        {activeTab === "phone" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+            <div style={{ fontSize: "0.82rem", color: "var(--text-secondary)", lineHeight: 1.4 }}>
+              Sign in or create your INAVIST account instantly using your mobile number and SMS verification code.
+            </div>
+
+            {/* Invisible reCAPTCHA Anchor */}
+            <div id="recaptcha-container"></div>
+
+            {!otpSent ? (
+              <form onSubmit={handleSendOtp} style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+                <div>
+                  <label style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>
+                    Mobile Number (With Country Code)
+                  </label>
+                  <div style={{ position: "relative", marginTop: "4px" }}>
+                    <input
+                      type="tel"
+                      value={phoneInput}
+                      onChange={(e) => setPhoneInput(e.target.value)}
+                      placeholder="+91 98765 43210"
+                      required
+                      style={{
+                        width: "100%",
+                        padding: "11px 12px 11px 36px",
+                        borderRadius: "10px",
+                        border: "1px solid var(--border-subtle)",
+                        background: isDark ? "rgba(0,0,0,0.25)" : "#F8FAFC",
+                        color: "var(--text-primary)",
+                        fontSize: "0.95rem",
+                        fontWeight: 700,
+                        letterSpacing: "0.03em"
+                      }}
+                    />
+                    <Phone size={16} style={{ position: "absolute", left: "12px", top: "13px", color: "var(--text-muted)" }} />
+                  </div>
+                  <div style={{ fontSize: "0.70rem", color: "var(--text-muted)", marginTop: "4px" }}>
+                    Include country code, e.g. <code>+91</code> for India, <code>+1</code> for USA.
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  style={{
+                    padding: "12px",
+                    borderRadius: "var(--radius-xl, 14px)",
+                    background: "linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)",
+                    color: "#FFFFFF",
+                    border: "none",
+                    fontWeight: 900,
+                    fontSize: "0.92rem",
+                    cursor: loading ? "not-allowed" : "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "8px",
+                    boxShadow: "0 4px 14px rgba(37, 99, 235, 0.35)"
+                  }}
+                >
+                  {loading ? <RefreshCw size={16} className="animate-spin" /> : <Phone size={16} />}
+                  <span>{loading ? "Sending SMS OTP..." : "Send Verification Code"}</span>
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleVerifyOtp} style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+                <div style={{ padding: "10px 14px", borderRadius: "10px", background: "var(--bg-tertiary)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontSize: "0.70rem", color: "var(--text-muted)" }}>Code sent to</div>
+                    <div style={{ fontSize: "0.88rem", fontWeight: 800, color: "var(--text-primary)" }}>{phoneInput}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setOtpSent(false); setOtpInput(""); }}
+                    style={{ background: "none", border: "none", color: "#2563EB", fontSize: "0.75rem", fontWeight: 700, cursor: "pointer" }}
+                  >
+                    Change Number
+                  </button>
+                </div>
+
+                <div>
+                  <label style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>
+                    6-Digit SMS Verification Code
+                  </label>
+                  <div style={{ position: "relative", marginTop: "4px" }}>
+                    <input
+                      type="text"
+                      maxLength={6}
+                      value={otpInput}
+                      onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, ""))}
+                      placeholder="123456"
+                      autoFocus
+                      required
+                      style={{
+                        width: "100%",
+                        padding: "12px 12px 12px 36px",
+                        borderRadius: "10px",
+                        border: "1.5px solid #2563EB",
+                        background: isDark ? "rgba(0,0,0,0.25)" : "#F8FAFC",
+                        color: "var(--text-primary)",
+                        fontSize: "1.2rem",
+                        fontWeight: 900,
+                        letterSpacing: "0.3em",
+                        textAlign: "center"
+                      }}
+                    />
+                    <KeyRound size={16} style={{ position: "absolute", left: "12px", top: "16px", color: "var(--text-muted)" }} />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={loading || otpInput.length < 6}
+                  style={{
+                    padding: "12px",
+                    borderRadius: "var(--radius-xl, 14px)",
+                    background: otpInput.length === 6 ? "linear-gradient(135deg, #10B981 0%, #059669 100%)" : "var(--bg-tertiary)",
+                    color: otpInput.length === 6 ? "#FFFFFF" : "var(--text-muted)",
+                    border: "none",
+                    fontWeight: 900,
+                    fontSize: "0.92rem",
+                    cursor: otpInput.length === 6 && !loading ? "pointer" : "not-allowed",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "8px",
+                    boxShadow: otpInput.length === 6 ? "0 4px 14px rgba(16, 185, 129, 0.35)" : "none"
+                  }}
+                >
+                  {loading ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                  <span>{loading ? "Verifying Code..." : "Verify & Sign In"}</span>
+                </button>
+              </form>
+            )}
+
+            {/* Alternative Quick Logins */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px", paddingTop: "10px", borderTop: "1px solid var(--border-subtle)" }}>
+              <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", textAlign: "center", fontWeight: 700, textTransform: "uppercase" }}>
+                Or continue with Google or Demo
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                <button
+                  type="button"
+                  onClick={loginWithGoogle}
+                  style={{
+                    padding: "9px 12px",
+                    borderRadius: "10px",
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-subtle)",
+                    color: "var(--text-primary)",
+                    fontWeight: 700,
+                    fontSize: "0.80rem",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "6px"
+                  }}
+                >
+                  <span>Google</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={loginWithDemo}
+                  style={{
+                    padding: "9px 12px",
+                    borderRadius: "10px",
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-subtle)",
+                    color: "var(--text-primary)",
+                    fontWeight: 700,
+                    fontSize: "0.80rem",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "6px"
+                  }}
+                >
+                  <Sparkles size={14} />
+                  <span>Demo</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 3: SIGN UP (INDIAN CITIZEN) */}
         {activeTab === "signup" && (
           <form onSubmit={handleIndianSubmit} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>

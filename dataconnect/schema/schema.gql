@@ -1,0 +1,83 @@
+# INAVIST Travel Relational Schema for Firebase SQL Connect
+
+# Travelers (Registered User Profiles)
+type Traveler @table(key: "uid") {
+  uid: String! @default(expr: "auth.uid")
+  email: String! @unique
+  name: String
+  phone: String
+  role: String @default(value: "user")
+  avatar: String
+  homeCity: String
+  travelStyle: String
+  createdAt: Timestamp! @default(expr: "request.time")
+  updatedAt: Timestamp! @default(expr: "request.time")
+}
+
+# Destinations Catalog
+type Destination @table {
+  id: String!
+  name: String!
+  state: String! @index
+  district: String
+  region: String
+  category: String @index
+  overview: String
+  images: [String!]!
+  rating: Float @default(value: 4.8)
+  reviewsCount: Int @default(value: 0)
+  crowdLevel: String
+  viewpointStatus: String
+  stayCost: Int
+  foodCost: Int
+  travelCost: Int
+  createdAt: Timestamp! @default(expr: "request.time")
+}
+
+# Trips
+type Trip @table {
+  id: UUID! @default(expr: "uuidV4()")
+  traveler: Traveler!
+  title: String!
+  destination: String!
+  days: Int!
+  budget: Int
+  status: String @default(value: "planned")
+  createdAt: Timestamp! @default(expr: "request.time")
+  updatedAt: Timestamp! @default(expr: "request.time")
+}
+
+# Bookings (Transit Reservations)
+type Booking @table {
+  id: UUID! @default(expr: "uuidV4()")
+  traveler: Traveler!
+  pnrNumber: String! @unique
+  mode: String!
+  serviceName: String!
+  origin: String!
+  destination: String!
+  travelDate: Date!
+  status: String! @default(value: "confirmed")
+  totalPrice: Int!
+  createdAt: Timestamp! @default(expr: "request.time")
+}
+
+# Reviews
+type Review @table {
+  id: UUID! @default(expr: "uuidV4()")
+  destination: Destination!
+  traveler: Traveler!
+  rating: Int!
+  comment: String!
+  visitMonth: String
+  status: String @default(value: "approved")
+  createdAt: Timestamp! @default(expr: "request.time")
+}
+
+# Favorites (Traveler saved destinations)
+type Favorite @table @unique(fields: ["traveler", "destination"]) {
+  id: UUID! @default(expr: "uuidV4()")
+  traveler: Traveler!
+  destination: Destination!
+  createdAt: Timestamp! @default(expr: "request.time")
+}

@@ -483,15 +483,23 @@ export const SmartPlanner = ({ preselectedDestination, onSelectDestination, onOp
     }));
   };
 
-  const handleSaveToTrips = () => {
+  const [isSavingTrip, setIsSavingTrip] = useState(false);
+
+  const handleSaveToTrips = async () => {
     if (!isAuthenticated) {
       showToast?.("Please Sign In or Create an Account to save trips to your Passport! 🏆");
       openAuthModal("signin");
       return;
     }
     if (!activePlan) return;
-    saveTrip(activePlan);
-    showToast?.("Trip saved to your My Passport! 🏆");
+    setIsSavingTrip(true);
+    try {
+      await saveTrip(activePlan);
+    } catch (err) {
+      console.warn("Save trip error:", err);
+    } finally {
+      setIsSavingTrip(false);
+    }
   };
 
   const handleShare = () => {
@@ -1004,6 +1012,7 @@ export const SmartPlanner = ({ preselectedDestination, onSelectDestination, onOp
               <button
                 type="button"
                 onClick={handleSaveToTrips}
+                disabled={isSavingTrip}
                 style={{
                   padding: "8px 14px",
                   borderRadius: "8px",
@@ -1015,11 +1024,12 @@ export const SmartPlanner = ({ preselectedDestination, onSelectDestination, onOp
                   display: "inline-flex",
                   alignItems: "center",
                   gap: "6px",
-                  cursor: "pointer"
+                  cursor: isSavingTrip ? "not-allowed" : "pointer",
+                  opacity: isSavingTrip ? 0.7 : 1
                 }}
               >
                 <BookmarkCheck size={14} />
-                <span>Save Trip</span>
+                <span>{isSavingTrip ? "Saving to Cloud..." : "Save Trip"}</span>
               </button>
 
               <button
@@ -1549,6 +1559,25 @@ export const SmartPlanner = ({ preselectedDestination, onSelectDestination, onOp
                       }}
                     >
                       View Itinerary
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActivePlan(trip);
+                        setIsModifyModalOpen(true);
+                      }}
+                      style={{
+                        padding: "9px 12px",
+                        borderRadius: "8px",
+                        border: "1px solid var(--border-subtle)",
+                        background: "var(--bg-tertiary)",
+                        color: "var(--text-primary)",
+                        fontWeight: 700,
+                        fontSize: "0.80rem",
+                        cursor: "pointer"
+                      }}
+                    >
+                      Adapt / Edit
                     </button>
                     <button
                       type="button"

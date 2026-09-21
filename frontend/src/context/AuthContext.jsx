@@ -1,6 +1,17 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
-import { DEFAULT_AVATAR } from "../data/avatarPresets";
-import { api, getAuthToken, setAuthToken } from "../api/client";
+import { 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signInWithPopup, 
+  signOut, 
+  onAuthStateChanged,
+  sendPasswordResetEmail,
+  RecaptchaVerifier,
+  signInWithPhoneNumber,
+  updateProfile as updateFirebaseProfile
+} from "firebase/auth";
+import { auth, googleProvider } from "../config/firebase";
+import { TravelSyncService } from "../services/TravelSyncService";
 
 const AuthContext = createContext(null);
 
@@ -48,45 +59,71 @@ export const AuthProvider = ({ children }) => {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        return { ...parsed, avatar: "/default-avatar.png", avatarId: "default-avatar" };
+        return { ...parsed, avatar: parsed.avatar || "/default-avatar.png" };
       } catch (e) {
         return DEFAULT_USER;
       }
     }
     return DEFAULT_USER;
   });
+
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     return localStorage.getItem("yatra_auth") === "true";
   });
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [authInitialTab, setAuthInitialTab] = useState("signin"); // 'signin' | 'signup' | 'foreigner'
 
-  // Synchronize user to localStorage for offline access
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authInitialTab, setAuthInitialTab] = useState("signin"); // 'signin' | 'phone' | 'signup' | 'foreigner' | 'forgot'
+  const [phoneConfirmationResult, setPhoneConfirmationResult] = useState(null);
+
+  // Synchronize user to localStorage for offline cache
   useEffect(() => {
     if (user) {
       localStorage.setItem("yatra_user", JSON.stringify(user));
     }
   }, [user]);
 
-  // Session check on mount: verify existing JWT with backend
+  // Real-Time Firebase Auth State Listener
   useEffect(() => {
-    const token = getAuthToken();
-    if (token) {
-      api.auth.getMe().then((res) => {
-        if (res.success && res.data) {
-          setUser((prev) => ({
-            ...DEFAULT_USER,
-            ...prev,
-            ...res.data,
-            id: res.data._id || res.data.id || prev?.id
-          }));
-          setIsAuthenticated(true);
-          localStorage.setItem("yatra_auth", "true");
-        }
-      }).catch((err) => {
-        console.warn("Could not verify session with backend:", err);
-      });
-    }
+    if (!auth) return;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser) => {
+      if (firebaseUser) {
+        setIsAuthenticated(true);
+        localStorage.setItem("yatra_auth", "true");
+
+        // Subscribe to real-time Firestore profile
+        const unsubscribeProfile = TravelSyncService.subscribeUserProfile(
+          firebaseUser.uid,
+          (cloudProfile) => {
+            setUser((prev) => ({
+              ...DEFAULT_USER,
+              ...prev,
+              ...cloudProfile,
+              id: firebaseUser.uid,
+              email: firebaseUser.email || cloudProfile?.email || prev?.email,
+              name: cloudProfile?.name || firebaseUser.displayName || prev?.name,
+              avatar: firebaseUser.photoURL || cloudProfile?.avatar || "/default-avatar.png"
+            }));
+          },
+          (err) => {
+            // Firestore not ready or permissions error: use fallback profile
+            setUser((prev) => ({
+              ...DEFAULT_USER,
+              ...prev,
+              id: firebaseUser.uid,
+              email: firebaseUser.email || prev?.email,
+              name: firebaseUser.displayName || prev?.name
+            }));
+          }
+        );
+
+        return () => {
+          if (unsubscribeProfile) unsubscribeProfile();
+        };
+      }
+    });
+
+    return () => unsubscribeAuth();
   }, []);
 
   const openAuthModal = (tab = "signin") => {
@@ -94,117 +131,91 @@ export const AuthProvider = ({ children }) => {
     setIsAuthModalOpen(true);
   };
 
-  // Standard Email + Password Login
+  // 1. Email + Password Sign In via Firebase Auth
   const login = async (email, password) => {
     try {
-      const res = await api.auth.login(email, password);
-      if (res.success && res.data?.user) {
-        const loggedUser = {
-          ...DEFAULT_USER,
-          ...res.data.user,
-          id: res.data.user._id || res.data.user.id
-        };
-        setUser(loggedUser);
-        setIsAuthenticated(true);
-        localStorage.setItem("yatra_auth", "true");
-        localStorage.setItem("yatra_user", JSON.stringify(loggedUser));
-        setIsAuthModalOpen(false);
-        return { success: true, user: loggedUser };
+      if (!auth) {
+        throw new Error("Firebase Auth is not initialized.");
       }
-      return { success: false, message: res.message || "Invalid credentials." };
+      const credential = await signInWithEmailAndPassword(auth, email, password);
+      const fbUser = credential.user;
+      const loggedUser = {
+        ...DEFAULT_USER,
+        id: fbUser.uid,
+        email: fbUser.email,
+        name: fbUser.displayName || email.split("@")[0]
+      };
+      setUser(loggedUser);
+      setIsAuthenticated(true);
+      localStorage.setItem("yatra_auth", "true");
+      setIsAuthModalOpen(false);
+      return { success: true, user: loggedUser };
     } catch (err) {
-      return { success: false, message: err.message || "Network request failed." };
-    }
-  };
-
-  // One-Click Demo Login (Arjun Verma)
-  const loginWithDemo = async () => {
-    try {
-      const res = await api.auth.demoLogin();
-      if (res.success && res.data?.user) {
-        const demoUser = {
-          ...DEFAULT_USER,
-          ...res.data.user,
-          id: res.data.user._id || res.data.user.id
-        };
-        setUser(demoUser);
-        setIsAuthenticated(true);
-        localStorage.setItem("yatra_auth", "true");
-        localStorage.setItem("yatra_user", JSON.stringify(demoUser));
-        setIsAuthModalOpen(false);
-        return { success: true, user: demoUser };
+      console.warn("Firebase email login error:", err);
+      let message = err.message;
+      if (err.code === "auth/invalid-credential" || err.code === "auth/wrong-password" || err.code === "auth/user-not-found") {
+        message = "Invalid email or password. Please verify your credentials.";
+      } else if (err.code === "auth/invalid-email") {
+        message = "Invalid email address format.";
+      } else if (err.code === "auth/too-many-requests") {
+        message = "Access temporarily disabled due to many failed attempts. Try again later or reset password.";
       }
-    } catch (e) {
-      console.warn("Demo login API unreachable, falling back to local demo profile:", e);
+      return { success: false, message };
     }
-    // High-fidelity fallback if backend is momentarily unreachable
-    setUser(DEFAULT_USER);
-    setIsAuthenticated(true);
-    localStorage.setItem("yatra_auth", "true");
-    setIsAuthModalOpen(false);
-    return { success: true, user: DEFAULT_USER };
   };
 
-  // Social Login (Google / Apple)
+  // 2. Google Sign-In via Firebase Auth
+  const loginWithGoogle = async () => {
+    try {
+      if (!auth) throw new Error("Firebase Auth not initialized.");
+      const result = await signInWithPopup(auth, googleProvider);
+      const fbUser = result.user;
+      const socialUser = {
+        ...DEFAULT_USER,
+        uid: fbUser.uid,
+        id: fbUser.uid,
+        name: fbUser.displayName || "Google Traveler",
+        email: fbUser.email || "",
+        photoURL: fbUser.photoURL || "/default-avatar.png",
+        avatar: fbUser.photoURL || "/default-avatar.png",
+        phone: fbUser.phoneNumber || "+91 94480 12345",
+        role: "user",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        verificationType: "Verified via Google Sign-In",
+        homeCity: "Bengaluru, India"
+      };
+      await TravelSyncService.saveUserProfile(fbUser.uid, socialUser);
+      setUser(socialUser);
+      setIsAuthenticated(true);
+      localStorage.setItem("yatra_auth", "true");
+      setIsAuthModalOpen(false);
+      return { success: true, user: socialUser };
+    } catch (err) {
+      console.warn("Google sign-in error:", err);
+      let message = err.message;
+      if (err.code === "auth/popup-closed-by-user") {
+        message = "Google Sign-In was cancelled.";
+      } else if (err.code === "auth/unauthorized-domain") {
+        message = "This domain is not authorized for Google Sign-In. Add localhost to Firebase authorized domains.";
+      }
+      return { success: false, message };
+    }
+  };
+
+  // Social Login wrapper (Google or Apple)
   const loginWithSocial = async (provider) => {
-    try {
-      const res = await api.auth.socialLogin({
-        provider: provider.toLowerCase(),
-        name: provider === "Google" ? "Aditya Krishnan" : "Ananya Roy",
-        email: `${provider.toLowerCase()}_traveler@example.com`
-      });
-      if (res.success && res.data?.user) {
-        const socialUser = {
-          ...DEFAULT_USER,
-          ...res.data.user,
-          id: res.data.user._id || res.data.user.id
-        };
-        setUser(socialUser);
-        setIsAuthenticated(true);
-        localStorage.setItem("yatra_auth", "true");
-        localStorage.setItem("yatra_user", JSON.stringify(socialUser));
-        setIsAuthModalOpen(false);
-        return { success: true, user: socialUser };
-      }
-    } catch (e) {
-      console.warn("Social login API error, falling back locally:", e);
+    if (provider === "Google") {
+      return loginWithGoogle();
     }
-
+    // Apple ID / Generic fallback
     const socialUser = {
+      ...DEFAULT_USER,
       id: `usr-${provider.toLowerCase()}-${Date.now()}`,
-      name: provider === "Google" ? "Aditya Krishnan" : "Ananya Roy",
+      name: "Ananya Roy",
       email: `${provider.toLowerCase()}_traveler@example.com`,
-      avatarId: "default-avatar",
-      avatar: "/default-avatar.png",
-      isVerified: true,
-      isForeigner: false,
-      nationality: "Indian",
-      verificationType: "Verified via " + provider,
-      homeCity: "Bengaluru, Karnataka",
-      registeredLocation: {
-        city: "Bengaluru",
-        state: "Karnataka",
-        country: "India",
-        formattedAddress: "Bengaluru, Karnataka, India",
-        isApproximate: true,
-        updatedAt: new Date().toISOString()
-      },
-      joinedDate: "August 2026",
-      phone: "+91 94480 12345",
-      travelStyle: "Cultural Heritage & Foodie",
-      stats: {
-        statesVisited: 8,
-        districtsVisited: 22,
-        gemsDiscovered: 7,
-        totalTrips: 9,
-        totalBookings: 6,
-        completedTrips: 5,
-        totalBudgetSaved: 19500
-      },
-      badges: [
-        { id: "himalaya", name: "Himalayan Explorer", icon: "🏔️", desc: "Visited 3+ high-altitude passes" },
-        { id: "foodie", name: "Spice Route Foodie", icon: "🍲", desc: "Sampled regional cuisines across 6 states" }
-      ]
+      verificationType: `Verified via ${provider}`,
+      homeCity: "Bengaluru, Karnataka"
     };
     setUser(socialUser);
     setIsAuthenticated(true);
@@ -213,219 +224,272 @@ export const AuthProvider = ({ children }) => {
     return { success: true, user: socialUser };
   };
 
-  // Indian Citizen Registration
+  // 3. Phone Authentication Setup & SMS OTP Dispatch
+  const setupRecaptcha = (containerId = "recaptcha-container") => {
+    if (!auth) return null;
+    try {
+      if (window.recaptchaVerifier) {
+        try {
+          window.recaptchaVerifier.clear();
+        } catch (e) {
+          // Ignore clearing error
+        }
+      }
+      window.recaptchaVerifier = new RecaptchaVerifier(auth, containerId, {
+        size: "invisible",
+        callback: () => {
+          // reCAPTCHA solved
+        },
+        "expired-callback": () => {
+          console.warn("[Auth] reCAPTCHA expired, please retry.");
+        }
+      });
+      return window.recaptchaVerifier;
+    } catch (e) {
+      console.warn("[Auth] Recaptcha setup notice:", e.message);
+      return null;
+    }
+  };
+
+  const sendPhoneOtp = async (phoneNumber, containerId = "recaptcha-container") => {
+    try {
+      if (!auth) throw new Error("Firebase Auth is not available.");
+      const appVerifier = setupRecaptcha(containerId);
+      const confirmationResult = await signInWithPhoneNumber(auth, phoneNumber, appVerifier);
+      setPhoneConfirmationResult(confirmationResult);
+      window.confirmationResult = confirmationResult;
+      return { success: true, confirmationResult };
+    } catch (err) {
+      console.error("[Auth] Send Phone OTP error:", err);
+      let message = err.message;
+      if (err.code === "auth/invalid-phone-number") {
+        message = "Invalid phone number format. Please include country code e.g. +91 9876543210";
+      } else if (err.code === "auth/quota-exceeded") {
+        message = "SMS quota exceeded for this project. Please try again later or use Email/Google.";
+      }
+      return { success: false, message };
+    }
+  };
+
+  const verifyPhoneOtp = async (otpCode, additionalDetails = {}) => {
+    try {
+      const activeConfirmation = phoneConfirmationResult || window.confirmationResult;
+      if (!activeConfirmation) {
+        return { success: false, message: "No active verification session. Please request a new OTP." };
+      }
+      const credential = await activeConfirmation.confirm(otpCode);
+      const fbUser = credential.user;
+      const phoneUser = {
+        ...DEFAULT_USER,
+        id: fbUser.uid,
+        name: additionalDetails.name || "Verified Mobile Traveler",
+        phone: fbUser.phoneNumber || additionalDetails.phone || "",
+        verificationType: "Phone Number (SMS OTP Verified)",
+        homeCity: additionalDetails.city || "New Delhi, India"
+      };
+      await TravelSyncService.saveUserProfile(fbUser.uid, phoneUser);
+      setUser(phoneUser);
+      setIsAuthenticated(true);
+      localStorage.setItem("yatra_auth", "true");
+      setIsAuthModalOpen(false);
+      return { success: true, user: phoneUser };
+    } catch (err) {
+      console.error("[Auth] Verify Phone OTP error:", err);
+      let message = err.message;
+      if (err.code === "auth/invalid-verification-code") {
+        message = "Invalid 6-digit OTP code entered. Please check and retry.";
+      } else if (err.code === "auth/code-expired") {
+        message = "The SMS OTP code has expired. Please request a new code.";
+      }
+      return { success: false, message };
+    }
+  };
+
+  // 4. Indian Citizen Account Registration (Email/Password + Profile to Firestore)
   const registerIndianUser = async (formData) => {
     try {
-      const res = await api.auth.register({
+      if (!auth) throw new Error("Firebase Auth not initialized.");
+      const credential = await createUserWithEmailAndPassword(auth, formData.email, formData.password || "Yatri@2026!");
+      const fbUser = credential.user;
+      
+      try {
+        await updateFirebaseProfile(fbUser, { displayName: formData.name });
+      } catch (e) {
+        // Continue if profile display name update fails
+      }
+
+      const newUser = {
+        ...DEFAULT_USER,
+        uid: fbUser.uid,
+        id: fbUser.uid,
         name: formData.name || "Indian Traveler",
         email: formData.email,
-        password: formData.password || "Yatri@2026!",
-        phone: formData.phone || "",
+        photoURL: fbUser.photoURL || "/default-avatar.png",
+        avatar: fbUser.photoURL || "/default-avatar.png",
+        phone: formData.phone || "+91 98000 00000",
+        role: "user",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        isForeigner: false,
+        nationality: "Indian",
+        verificationType: "Aadhaar / DigiLocker Verified",
         homeCity: `${formData.city || "New Delhi"}, ${formData.state || "India"}`,
         travelStyle: formData.travelStyle || "Heritage & Nature",
-        isForeigner: false
-      });
-      if (res.success && res.data?.user) {
-        const newUser = {
-          ...DEFAULT_USER,
-          ...res.data.user,
-          id: res.data.user._id || res.data.user.id
-        };
-        setUser(newUser);
-        setIsAuthenticated(true);
-        localStorage.setItem("yatra_auth", "true");
-        localStorage.setItem("yatra_user", JSON.stringify(newUser));
-        setIsAuthModalOpen(false);
-        return { success: true, user: newUser };
-      } else if (res.message) {
-        return { success: false, message: res.message };
-      }
-    } catch (e) {
-      console.warn("Registration API error, fallback to local register:", e);
-    }
+        joinedDate: "September 2026"
+      };
 
-    const newUser = {
-      id: `usr-in-${Date.now()}`,
-      name: formData.name || "Indian Traveler",
-      email: formData.email,
-      avatarId: "default-avatar",
-      avatar: "/default-avatar.png",
-      isVerified: true,
-      isForeigner: false,
-      nationality: "Indian",
-      verificationType: "Aadhaar / Govt ID Verified",
-      homeCity: `${formData.city || "New Delhi"}, ${formData.state || "India"}`,
-      registeredLocation: {
-        city: formData.city || "Bengaluru",
-        state: formData.state || "Karnataka",
-        country: "India",
-        formattedAddress: `${formData.city || "Bengaluru"}, ${formData.state || "Karnataka"}, India`,
-        isApproximate: true,
-        updatedAt: new Date().toISOString()
-      },
-      joinedDate: "August 2026",
-      phone: formData.phone || "+91 98000 00000",
-      travelStyle: formData.travelStyle || "Heritage & Nature",
-      stats: {
-        statesVisited: 1,
-        districtsVisited: 3,
-        gemsDiscovered: 2,
-        totalTrips: 1,
-        totalBookings: 1,
-        completedTrips: 1,
-        totalBudgetSaved: 3500
-      },
-      badges: [
-        { id: "newcomer", name: "Incredible India Explorer", icon: "🇮🇳", desc: "New YĀTRI Citizen Member" }
-      ]
-    };
-    setUser(newUser);
-    setIsAuthenticated(true);
-    localStorage.setItem("yatra_auth", "true");
-    setIsAuthModalOpen(false);
-    return { success: true, user: newUser };
+      await TravelSyncService.saveUserProfile(fbUser.uid, newUser);
+      setUser(newUser);
+      setIsAuthenticated(true);
+      localStorage.setItem("yatra_auth", "true");
+      setIsAuthModalOpen(false);
+      return { success: true, user: newUser };
+    } catch (err) {
+      console.warn("Registration error:", err);
+      let message = err.message;
+      if (err.code === "auth/email-already-in-use") {
+        message = "This email is already in use. Please sign in instead.";
+      } else if (err.code === "auth/weak-password") {
+        message = "Password must be at least 6 characters.";
+      }
+      return { success: false, message };
+    }
   };
 
-  // Foreigner / International Traveler Registration
+  // 5. Foreigner / International Tourist Registration (Email/Password + e-Visa/Passport)
   const registerForeignerUser = async (formData) => {
     try {
-      const res = await api.auth.register({
+      if (!auth) throw new Error("Firebase Auth not initialized.");
+      const credential = await createUserWithEmailAndPassword(auth, formData.email, formData.password || "Yatri@2026!");
+      const fbUser = credential.user;
+
+      try {
+        await updateFirebaseProfile(fbUser, { displayName: formData.passportName || formData.name });
+      } catch (e) {
+        // Continue if profile display name update fails
+      }
+
+      const foreignerUser = {
+        ...DEFAULT_USER,
+        uid: fbUser.uid,
+        id: fbUser.uid,
         name: formData.passportName || formData.name || "International Traveler",
         email: formData.email,
-        password: formData.password || "Yatri@2026!",
-        phone: formData.phone || "",
+        photoURL: fbUser.photoURL || "/default-avatar.png",
+        avatar: fbUser.photoURL || "/default-avatar.png",
+        phone: formData.phone || "+1 555 123 4567",
+        role: "user",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        isForeigner: true,
         nationality: formData.nationality || "United States",
-        homeCity: `${formData.homeCity || "New York"}, ${formData.nationality || "USA"}`,
-        travelStyle: formData.travelStyle || "Spiritual & Monument Exploration",
+        verificationType: "Verified International Tourist (Passport & e-Visa Checked)",
         passportNumber: formData.passportNumber ? formData.passportNumber.toUpperCase() : "PASS-998877",
+        passportExpiry: formData.passportExpiry || "2030-12-31",
         visaNumber: formData.visaNumber ? formData.visaNumber.toUpperCase() : "IN-EVSA-2026-8899",
         visaType: formData.visaType || "e-Tourist Visa (30/365 Days)",
+        visaExpiry: formData.visaExpiry || "2027-08-15",
         arrivalPort: formData.arrivalPort || "Indira Gandhi Int'l Airport (DEL)",
-        isForeigner: true
-      });
-      if (res.success && res.data?.user) {
-        const foreignerUser = {
-          ...DEFAULT_USER,
-          ...res.data.user,
-          id: res.data.user._id || res.data.user.id
-        };
-        setUser(foreignerUser);
-        setIsAuthenticated(true);
-        localStorage.setItem("yatra_auth", "true");
-        localStorage.setItem("yatra_user", JSON.stringify(foreignerUser));
-        setIsAuthModalOpen(false);
-        return { success: true, user: foreignerUser };
-      } else if (res.message) {
-        return { success: false, message: res.message };
-      }
-    } catch (e) {
-      console.warn("Foreigner registration API error:", e);
-    }
+        homeCity: `${formData.homeCity || "New York"}, ${formData.nationality || "USA"}`,
+        travelStyle: formData.travelStyle || "Spiritual & Monument Exploration",
+        joinedDate: "September 2026"
+      };
 
-    const foreignerUser = {
-      id: `usr-intl-${Date.now()}`,
-      name: formData.passportName || formData.name || "International Traveler",
-      email: formData.email,
-      avatarId: "default-avatar",
-      avatar: "/default-avatar.png",
-      isVerified: true,
-      isForeigner: true,
-      nationality: formData.nationality || "United States",
-      verificationType: "Verified International Tourist (Passport & e-Visa Checked)",
-      passportNumber: formData.passportNumber ? formData.passportNumber.toUpperCase() : "PASS-998877",
-      passportExpiry: formData.passportExpiry || "2030-12-31",
-      visaNumber: formData.visaNumber ? formData.visaNumber.toUpperCase() : "IN-EVSA-2026-8899",
-      visaType: formData.visaType || "e-Tourist Visa (30/365 Days)",
-      visaExpiry: formData.visaExpiry || "2027-08-15",
-      arrivalPort: formData.arrivalPort || "Indira Gandhi Int'l Airport (DEL)",
-      homeCountryContact: formData.emergencyContact || "+1 555 019 2834",
-      homeCity: `${formData.homeCity || "New York"}, ${formData.nationality || "USA"}`,
-      registeredLocation: {
-        city: "Delhi Airport Area",
-        state: "Delhi",
-        country: "India",
-        formattedAddress: "Delhi NCR, India (Arrival Zone)",
-        isApproximate: true,
-        updatedAt: new Date().toISOString()
-      },
-      joinedDate: "August 2026",
-      phone: formData.phone || "+1 555 123 4567",
-      travelStyle: formData.travelStyle || "Spiritual & Monument Exploration",
-      stats: {
-        statesVisited: 3,
-        districtsVisited: 8,
-        gemsDiscovered: 4,
-        totalTrips: 3,
-        totalBookings: 2,
-        completedTrips: 2,
-        totalBudgetSaved: 8500
-      },
-      badges: [
-        { id: "global", name: "Global India Explorer", icon: "🌍", desc: "International Tourist Pass Holder" },
-        { id: "golden_triangle", name: "Golden Triangle Master", icon: "🕌", desc: "Visited Delhi, Agra & Jaipur" }
-      ]
-    };
-    setUser(foreignerUser);
+      await TravelSyncService.saveUserProfile(fbUser.uid, foreignerUser);
+      setUser(foreignerUser);
+      setIsAuthenticated(true);
+      localStorage.setItem("yatra_auth", "true");
+      setIsAuthModalOpen(false);
+      return { success: true, user: foreignerUser };
+    } catch (err) {
+      console.warn("Foreigner registration error:", err);
+      let message = err.message;
+      if (err.code === "auth/email-already-in-use") {
+        message = "This email is already in use. Please sign in instead.";
+      }
+      return { success: false, message };
+    }
+  };
+
+  // 6. Reset Password via Firebase
+  const resetPassword = async (email) => {
+    try {
+      if (!auth) throw new Error("Firebase Auth not initialized.");
+      await sendPasswordResetEmail(auth, email);
+      return { success: true };
+    } catch (err) {
+      console.warn("Password reset error:", err);
+      return { success: false, message: err.message };
+    }
+  };
+
+  // 7. Demo 1-Click Traveler Login (Arjun Verma)
+  const loginWithDemo = async () => {
+    setUser(DEFAULT_USER);
     setIsAuthenticated(true);
     localStorage.setItem("yatra_auth", "true");
     setIsAuthModalOpen(false);
-    return { success: true, user: foreignerUser };
+    return { success: true, user: DEFAULT_USER };
   };
 
+  // 8. Sign Out
   const logout = async () => {
     try {
-      await api.auth.logout();
+      if (auth) {
+        await signOut(auth);
+      }
     } catch (e) {
-      // offline logout
+      console.warn("Firebase sign-out error:", e);
     }
-    setAuthToken(null);
+    setUser(DEFAULT_USER);
     setIsAuthenticated(false);
     localStorage.setItem("yatra_auth", "false");
+    localStorage.removeItem("yatra_user");
   };
 
+  // 9. Update Profile
   const updateProfile = async (updatedFields) => {
-    setUser((prev) => {
-      const updated = {
-        ...prev,
-        ...updatedFields,
-        avatar: "/default-avatar.png",
-        avatarId: "default-avatar"
-      };
-      localStorage.setItem("yatra_user", JSON.stringify(updated));
-      return updated;
-    });
     try {
-      await api.user.updateProfile(updatedFields);
-    } catch (e) {
-      // Offline fallback
+      if (user?.id) {
+        await TravelSyncService.saveUserProfile(user.id, {
+          ...updatedFields,
+          updatedAt: new Date().toISOString()
+        });
+      }
+      setUser((prev) => {
+        const updated = {
+          ...prev,
+          ...updatedFields,
+          updatedAt: new Date().toISOString()
+        };
+        localStorage.setItem("yatra_user", JSON.stringify(updated));
+        return updated;
+      });
+      return { success: true };
+    } catch (err) {
+      console.warn("Update profile error:", err);
+      return { success: false, message: err.message };
     }
   };
 
+  // 10. Update Registered Location
   const updateRegisteredLocation = async (locationData) => {
+    const updatedLocation = {
+      ...user?.registeredLocation,
+      ...locationData,
+      updatedAt: new Date().toISOString()
+    };
     setUser((prev) => {
       const updated = {
         ...prev,
-        registeredLocation: {
-          ...prev?.registeredLocation,
-          ...locationData,
-          updatedAt: new Date().toISOString()
-        }
+        registeredLocation: updatedLocation
       };
       localStorage.setItem("yatra_user", JSON.stringify(updated));
       return updated;
     });
-    try {
-      const API_BASE = import.meta.env?.VITE_API_URL || "/api";
-      await fetch(`${API_BASE}/auth/location`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...(getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {})
-        },
-        body: JSON.stringify(locationData)
-      });
-    } catch (e) {
-      // Offline fallback
+
+    if (user?.id) {
+      await TravelSyncService.saveUserProfile(user.id, { registeredLocation: updatedLocation });
     }
   };
 
@@ -439,10 +503,14 @@ export const AuthProvider = ({ children }) => {
         authInitialTab,
         openAuthModal,
         login,
-        loginWithDemo,
+        loginWithGoogle,
         loginWithSocial,
+        sendPhoneOtp,
+        verifyPhoneOtp,
         registerIndianUser,
         registerForeignerUser,
+        resetPassword,
+        loginWithDemo,
         logout,
         updateProfile,
         updateRegisteredLocation

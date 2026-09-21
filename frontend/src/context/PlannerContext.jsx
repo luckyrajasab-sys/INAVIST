@@ -1,5 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { api } from "../api/client";
+import { useAuth } from "./AuthContext";
+import { TravelSyncService } from "../services/TravelSyncService";
+import { FirestoreService } from "../services/FirestoreService.js";
 
 const PlannerContext = createContext(null);
 
@@ -103,6 +106,8 @@ const DEFAULT_SAVED_TRIPS = [
 ];
 
 export const PlannerProvider = ({ children }) => {
+  const { user } = useAuth();
+
   // Saved Itineraries
   const [savedTrips, setSavedTrips] = useState(() => {
     const saved = localStorage.getItem("yatra_trips");
@@ -159,6 +164,73 @@ export const PlannerProvider = ({ children }) => {
     localStorage.setItem("yatra_booked_tickets", JSON.stringify(bookedTickets));
   }, [bookedTickets]);
 
+  // Real-time Firestore Cloud Sync for Authenticated User
+  useEffect(() => {
+    if (!user?.id) return;
+
+    // 1. Subscribe to User Trips in Firestore
+    const unsubTrips = FirestoreService.subscribeUserTrips(
+      user.id,
+      (cloudTrips) => {
+        if (cloudTrips && cloudTrips.length > 0) {
+          setSavedTrips((prev) => {
+            const cloudIds = new Set(cloudTrips.map((t) => t.id));
+            const localOnly = prev.filter((t) => !cloudIds.has(t.id));
+            const merged = [...cloudTrips, ...localOnly];
+            localStorage.setItem("yatra_trips", JSON.stringify(merged));
+            return merged;
+          });
+        }
+      },
+      (err) => console.warn("Trips sync notice:", err.message)
+    );
+
+    // 2. Subscribe to User Favorites in Firestore
+    const unsubFavs = FirestoreService.subscribeFavorites(
+      user.id,
+      (cloudFavs) => {
+        if (cloudFavs && cloudFavs.length > 0) {
+          const favIds = cloudFavs.map((f) => f.destinationId);
+          setBookmarkedIds((prev) => {
+            const merged = Array.from(new Set([...favIds, ...prev]));
+            localStorage.setItem("yatra_bookmarks", JSON.stringify(merged));
+            return merged;
+          });
+        }
+      },
+      (err) => console.warn("Favorites sync notice:", err.message)
+    );
+
+    // 3. Subscribe to User Bookings in Firestore
+    const unsubBookings = FirestoreService.subscribeUserBookings(
+      user.id,
+      (cloudBookings) => {
+        if (cloudBookings && cloudBookings.length > 0) {
+          setBookedTickets(cloudBookings);
+          try {
+            localStorage.setItem("inavist_all_bookings", JSON.stringify(cloudBookings));
+          } catch (e) {}
+        }
+      },
+      (err) => console.warn("Bookings sync notice:", err.message)
+    );
+
+    // 4. Subscribe to Emergency Contacts
+    const unsubContacts = TravelSyncService.subscribeEmergencyContacts(user.id, (cloudContacts) => {
+      if (cloudContacts && cloudContacts.length > 0) {
+        setEmergencyContacts(cloudContacts);
+        localStorage.setItem("yatra_emergency_contacts", JSON.stringify(cloudContacts));
+      }
+    });
+
+    return () => {
+      if (unsubTrips) unsubTrips();
+      if (unsubFavs) unsubFavs();
+      if (unsubBookings) unsubBookings();
+      if (unsubContacts) unsubContacts();
+    };
+  }, [user?.id]);
+
   // Synchronize trips and visited places with backend
   useEffect(() => {
     api.trips.getAll().then((res) => {
@@ -197,13 +269,26 @@ export const PlannerProvider = ({ children }) => {
     }, 4000);
   };
 
-  const toggleBookmark = (id) => {
-    setBookmarkedIds((prev) => {
-      const exists = prev.includes(id);
-      const updated = exists ? prev.filter((item) => item !== id) : [...prev, id];
-      showToast(exists ? "Removed from bookmarks" : "Saved to your bookmarks! 🔖");
-      return updated;
-    });
+  const toggleBookmark = async (id, destData = {}) => {
+    const exists = bookmarkedIds.includes(id);
+    try {
+      if (user?.id) {
+        if (exists) {
+          await FirestoreService.removeFavorite(user.id, id);
+        } else {
+          await FirestoreService.addFavorite(user.id, id, destData);
+        }
+      }
+      const updated = exists ? bookmarkedIds.filter((item) => item !== id) : [...bookmarkedIds, id];
+      setBookmarkedIds(updated);
+      localStorage.setItem("yatra_bookmarks", JSON.stringify(updated));
+      showToast(exists ? "Removed from favorites" : "Saved to your favorites! 🔖");
+      return !exists;
+    } catch (err) {
+      console.warn("toggleBookmark error:", err);
+      showToast(err.message || "Failed to update favorite", "error");
+      throw err;
+    }
   };
 
   const toggleVisited = (destination, note = "", spending = 0) => {
@@ -237,26 +322,78 @@ export const PlannerProvider = ({ children }) => {
     return bookmarkedIds.includes(id);
   };
 
-  const saveTrip = (trip) => {
+  const saveTrip = async (trip) => {
     const newTrip = {
-      id: `trip-${Date.now()}`,
-      createdAt: new Date().toISOString().split("T")[0],
+      id: trip.id || `trip-${Date.now()}`,
+      userId: user?.id,
+      createdAt: trip.createdAt || new Date().toISOString().split("T")[0],
       ...trip
     };
-    setSavedTrips((prev) => [newTrip, ...prev]);
-    showToast("Trip itinerary saved successfully! 🎒");
-    api.trips.create(newTrip).catch((err) => {
-      console.warn("Could not save trip to backend:", err);
-    });
-    return newTrip;
+    try {
+      if (user?.id) {
+        await FirestoreService.createTrip(user.id, newTrip);
+        TravelSyncService.saveTrip(user.id, newTrip);
+      }
+      setSavedTrips((prev) => [newTrip, ...prev.filter((t) => t.id !== newTrip.id)]);
+      showToast("Trip itinerary saved successfully! 🎒");
+      api.trips.create(newTrip).catch(() => {});
+      return newTrip;
+    } catch (err) {
+      console.warn("Could not save trip to cloud:", err);
+      showToast(err.message || "Could not save trip to Firestore.", "error");
+      throw err;
+    }
   };
 
-  const deleteTrip = (tripId) => {
-    setSavedTrips((prev) => prev.filter((t) => t.id !== tripId));
-    showToast("Trip itinerary removed");
-    api.trips.delete(tripId).catch((err) => {
-      console.warn("Could not delete trip on backend:", err);
-    });
+  const updateTrip = async (tripId, updatedData) => {
+    try {
+      if (user?.id) {
+        await FirestoreService.updateTrip(user.id, tripId, updatedData);
+      }
+      setSavedTrips((prev) =>
+        prev.map((t) => (t.id === tripId ? { ...t, ...updatedData, updatedAt: new Date().toISOString() } : t))
+      );
+      showToast("Trip itinerary updated! 🎒");
+      return true;
+    } catch (err) {
+      console.warn("Could not update trip:", err);
+      showToast(err.message || "Failed to update trip.", "error");
+      throw err;
+    }
+  };
+
+  const deleteTrip = async (tripId) => {
+    try {
+      if (user?.id) {
+        await FirestoreService.deleteTrip(user.id, tripId);
+        TravelSyncService.deleteTrip(user.id, tripId);
+      }
+      setSavedTrips((prev) => prev.filter((t) => t.id !== tripId));
+      showToast("Trip itinerary removed");
+      api.trips.delete(tripId).catch(() => {});
+      return true;
+    } catch (err) {
+      console.warn("Could not delete trip:", err);
+      showToast(err.message || "Could not delete trip.", "error");
+      throw err;
+    }
+  };
+
+  const cancelBooking = async (bookingId) => {
+    try {
+      if (user?.id) {
+        await FirestoreService.cancelBooking(user.id, bookingId);
+      }
+      setBookedTickets((prev) =>
+        prev.map((b) => (b.id === bookingId || b.bookingId === bookingId ? { ...b, status: "cancelled" } : b))
+      );
+      showToast("Booking cancelled successfully.");
+      return true;
+    } catch (err) {
+      console.warn("cancelBooking error:", err);
+      showToast(err.message || "Could not cancel booking.", "error");
+      throw err;
+    }
   };
 
   const addEmergencyContact = (contact) => {
@@ -267,24 +404,32 @@ export const PlannerProvider = ({ children }) => {
     };
     setEmergencyContacts((prev) => [...prev, newContact]);
     showToast("Emergency contact added securely!");
+    if (user?.id) {
+      TravelSyncService.saveEmergencyContact(user.id, newContact);
+    }
   };
 
   const deleteEmergencyContact = (id) => {
     setEmergencyContacts((prev) => prev.filter((c) => c.id !== id));
     showToast("Contact deleted");
+    if (user?.id) {
+      TravelSyncService.deleteEmergencyContact(user.id, id);
+    }
   };
 
   const setPrimaryContact = (id) => {
-    setEmergencyContacts((prev) =>
-      prev.map((c) => ({
-        ...c,
-        isPrimary: c.id === id
-      }))
-    );
+    const updated = emergencyContacts.map((c) => ({
+      ...c,
+      isPrimary: c.id === id
+    }));
+    setEmergencyContacts(updated);
     showToast("Primary emergency contact updated");
+    if (user?.id) {
+      updated.forEach((contact) => TravelSyncService.saveEmergencyContact(user.id, contact));
+    }
   };
 
-  const bookTransportTicket = (transport, passengers = 1, travelDate) => {
+  const bookTransportTicket = async (transport, passengers = 1, travelDate) => {
     const pnr = `YTR-${Math.floor(100000 + Math.random() * 900000)}`;
     const totalAmount = (transport.price || transport.baseFare || 650) * passengers;
     const dateStr = travelDate || new Date(Date.now() + 86400000 * 3).toISOString().split("T")[0];
@@ -299,16 +444,18 @@ export const PlannerProvider = ({ children }) => {
       bookedAt: new Date().toLocaleString(),
       status: "Confirmed"
     };
-    setBookedTickets((prev) => [ticket, ...prev]);
-    showToast(`Booking Confirmed! PNR: ${pnr} 🎟️`);
 
     const bookingPayload = {
+      pnr,
+      transport,
       type: transport.type || transport.mode || "train",
       title: `${transport.operator || "Transit Network"} (${transport.from || "Origin"} ➔ ${transport.to || "Destination"})`,
       originCity: transport.from || "Origin",
       destinationCity: transport.to || "Destination",
       travelDate: dateStr,
       passengerCount: passengers,
+      status: "Confirmed",
+      amount: totalAmount,
       pricing: {
         baseFare: Math.round(totalAmount * 0.85),
         taxes: Math.round(totalAmount * 0.15),
@@ -321,24 +468,18 @@ export const PlannerProvider = ({ children }) => {
       }
     };
 
-    api.bookings.create(bookingPayload).then((res) => {
-      const createdBooking = res.data || {
-        bookingId: `INV-${Math.floor(100000 + Math.random() * 900000)}`,
-        pnr,
-        ...bookingPayload,
-        status: "Confirmed",
-        amount: totalAmount,
-        rewardPointsEarned: Math.floor(totalAmount * 0.07)
-      };
-      try {
-        const existing = JSON.parse(localStorage.getItem("inavist_all_bookings") || "[]");
-        localStorage.setItem("inavist_all_bookings", JSON.stringify([createdBooking, ...existing]));
-      } catch (e) {}
-    }).catch((err) => {
-      console.warn("Could not sync ticket booking to backend:", err);
-    });
-
-    return ticket;
+    try {
+      if (user?.id) {
+        await FirestoreService.createBooking(user.id, bookingPayload);
+      }
+      setBookedTickets((prev) => [ticket, ...prev]);
+      showToast(`Booking Confirmed! PNR: ${pnr} 🎟️`);
+      return ticket;
+    } catch (err) {
+      console.warn("Could not save booking to Firestore:", err);
+      showToast(err.message || "Failed to create booking in cloud.", "error");
+      throw err;
+    }
   };
 
 
@@ -359,7 +500,9 @@ export const PlannerProvider = ({ children }) => {
         isVisited,
         isBookmarked,
         saveTrip,
+        updateTrip,
         deleteTrip,
+        cancelBooking,
         addEmergencyContact,
         deleteEmergencyContact,
         setPrimaryContact,

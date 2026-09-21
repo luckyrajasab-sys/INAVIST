@@ -15,9 +15,12 @@ import {
   X
 } from "lucide-react";
 import { usePlanner } from "../../context/PlannerContext";
+import { useAuth } from "../../context/AuthContext";
+import { TravelSyncService } from "../../services/TravelSyncService";
 import { api } from "../../api/client";
 
 export const SOSCenter = () => {
+  const { user } = useAuth();
   const {
     emergencyContacts,
     addEmergencyContact,
@@ -48,6 +51,7 @@ export const SOSCenter = () => {
       setSosTriggered(true);
       setSliderValue(0);
       showToast("🚨 SOS Emergency Alert Activated & Broadcasted!");
+      TravelSyncService.broadcastSOS(user?.id, mockLocation, "EMERGENCY SOS: Traveler triggered high-priority emergency slider");
       api.emergency.triggerSOS(mockLocation, "EMERGENCY SOS: Traveler triggered high-priority emergency slider").catch((err) => {
         console.warn("Could not dispatch SOS alert to backend:", err);
       });

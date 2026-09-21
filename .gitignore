@@ -25,3 +25,5 @@ uploads/
 backend/uploads/
 .DS_Store
 Thumbs.db
+.firebase/
+.dataconnect/

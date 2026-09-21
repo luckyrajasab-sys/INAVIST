@@ -1,0 +1,135 @@
+# INAVIST Mutations for Firebase SQL Connect
+
+# Traveler Profile
+mutation UpsertTravelerProfile(
+  $name: String
+  $email: String!
+  $phone: String
+  $avatar: String
+  $homeCity: String
+  $travelStyle: String
+) @auth(level: USER) {
+  traveler_upsert(
+    data: {
+      uid_expr: "auth.uid"
+      email: $email
+      name: $name
+      phone: $phone
+      avatar: $avatar
+      homeCity: $homeCity
+      travelStyle: $travelStyle
+      updatedAt_expr: "request.time"
+    }
+  )
+}
+
+# Create Trip
+mutation CreateTrip(
+  $title: String!
+  $destination: String!
+  $days: Int!
+  $budget: Int
+) @auth(level: USER) {
+  trip_insert(
+    data: {
+      traveler: { uid_expr: "auth.uid" }
+      title: $title
+      destination: $destination
+      days: $days
+      budget: $budget
+    }
+  )
+}
+
+# Delete Trip (user-isolated)
+mutation DeleteTrip($id: UUID!) @auth(level: USER) {
+  trip_delete(
+    first: {
+      where: {
+        id: { eq: $id }
+        traveler: { uid: { eq_expr: "auth.uid" } }
+      }
+    }
+  )
+}
+
+# Create Transit Booking
+mutation CreateBooking(
+  $pnrNumber: String!
+  $mode: String!
+  $serviceName: String!
+  $origin: String!
+  $destination: String!
+  $travelDate: Date!
+  $totalPrice: Int!
+) @auth(level: USER) {
+  booking_insert(
+    data: {
+      traveler: { uid_expr: "auth.uid" }
+      pnrNumber: $pnrNumber
+      mode: $mode
+      serviceName: $serviceName
+      origin: $origin
+      destination: $destination
+      travelDate: $travelDate
+      totalPrice: $totalPrice
+      status: "confirmed"
+    }
+  )
+}
+
+# Cancel Transit Booking (user-isolated)
+mutation CancelBooking($id: UUID!) @auth(level: USER) {
+  booking_update(
+    first: {
+      where: {
+        id: { eq: $id }
+        traveler: { uid: { eq_expr: "auth.uid" } }
+      }
+    }
+    data: {
+      status: "cancelled"
+    }
+  )
+}
+
+# Create Review
+mutation CreateReview(
+  $destinationId: String!
+  $rating: Int!
+  $comment: String!
+  $visitMonth: String
+) @auth(level: USER) {
+  review_insert(
+    data: {
+      destination: { id: $destinationId }
+      traveler: { uid_expr: "auth.uid" }
+      rating: $rating
+      comment: $comment
+      visitMonth: $visitMonth
+      status: "approved"
+    }
+  )
+}
+
+# Add Favorite
+mutation AddFavorite($destinationId: String!) @auth(level: USER) {
+  favorite_insert(
+    data: {
+      traveler: { uid_expr: "auth.uid" }
+      destination: { id: $destinationId }
+    }
+  )
+}
+
+# Remove Favorite (user-isolated)
+mutation RemoveFavorite($id: UUID!) @auth(level: USER) {
+  favorite_delete(
+    first: {
+      where: {
+        id: { eq: $id }
+        traveler: { uid: { eq_expr: "auth.uid" } }
+      }
+    }
+  )
+}

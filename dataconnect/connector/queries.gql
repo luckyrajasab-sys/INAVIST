@@ -1,0 +1,131 @@
+# INAVIST Queries for Firebase SQL Connect
+
+# Public: List destinations
+query ListDestinations($state: String, $category: String, $limit: Int = 50)
+  @auth(level: PUBLIC, insecureReason: "Public destination directory for travelers") {
+  destinations(
+    where: {
+      state: { eq: $state }
+      category: { eq: $category }
+    }
+    orderBy: [{ rating: DESC }]
+    limit: $limit
+  ) {
+    id
+    name
+    state
+    district
+    region
+    category
+    overview
+    images
+    rating
+    reviewsCount
+    crowdLevel
+    viewpointStatus
+    stayCost
+    foodCost
+    travelCost
+  }
+}
+
+# Public: Get single destination by ID with its reviews
+query GetDestinationById($id: String!)
+  @auth(level: PUBLIC, insecureReason: "Public destination overview and community reviews") {
+  destination(id: $id) {
+    id
+    name
+    state
+    district
+    region
+    category
+    overview
+    images
+    rating
+    reviewsCount
+    crowdLevel
+    viewpointStatus
+    stayCost
+    foodCost
+    travelCost
+    reviews: reviews_on_destination(orderBy: [{ createdAt: DESC }], limit: 20) {
+      id
+      rating
+      comment
+      visitMonth
+      createdAt
+      traveler {
+        name
+        avatar
+      }
+    }
+  }
+}
+
+# User: Get current authenticated traveler profile
+query GetMyProfile @auth(level: USER) {
+  traveler(key: { uid_expr: "auth.uid" }) {
+    uid
+    email
+    name
+    phone
+    role
+    avatar
+    homeCity
+    travelStyle
+    createdAt
+  }
+}
+
+# User: List my planned trips
+query GetMyTrips @auth(level: USER) {
+  trips(
+    where: { traveler: { uid: { eq_expr: "auth.uid" } } }
+    orderBy: [{ createdAt: DESC }]
+  ) {
+    id
+    title
+    destination
+    days
+    budget
+    status
+    createdAt
+  }
+}
+
+# User: List my transit bookings
+query GetMyBookings @auth(level: USER) {
+  bookings(
+    where: { traveler: { uid: { eq_expr: "auth.uid" } } }
+    orderBy: [{ createdAt: DESC }]
+  ) {
+    id
+    pnrNumber
+    mode
+    serviceName
+    origin
+    destination
+    travelDate
+    status
+    totalPrice
+    createdAt
+  }
+}
+
+# User: List my saved favorite destinations
+query GetMyFavorites @auth(level: USER) {
+  favorites(
+    where: { traveler: { uid: { eq_expr: "auth.uid" } } }
+  ) {
+    id
+    destination {
+      id
+      name
+      state
+      category
+      rating
+      images
+    }
+    createdAt
+  }
+}

@@ -51,6 +51,7 @@ import { useRewards } from "../../context/RewardsContext";
 import { useOfflineVault } from "../../context/OfflineVaultContext";
 import { destinationsData, getAllStates } from "../../data/destinationsData";
 import { mockTravelCompanions } from "../../data/companionsData";
+import { storageService } from "../../services/FirestoreService";
 
 const SAMPLE_PAYMENTS = [
   {
@@ -99,7 +100,7 @@ export const UserProfile = ({ onSelectDestination, onBackdropChange, onNavigateT
   const { user, isAuthenticated, logout, setIsAuthModalOpen, openAuthModal, updateProfile, updateRegisteredLocation } = useAuth();
   const { currentLang, languagesList, changeLanguage } = useLanguage();
   const { theme, toggleTheme, isDark, accentColor, changeAccentColor, ACCENT_PALETTES } = useTheme();
-  const { bookmarkedIds, toggleBookmark, bookedTickets, showToast } = usePlanner();
+  const { bookmarkedIds, toggleBookmark, bookedTickets, savedTrips, showToast } = usePlanner();
   const { totalPoints, membershipTier } = useRewards();
   const { downloadedPacks } = useOfflineVault();
 
@@ -245,11 +246,54 @@ export const UserProfile = ({ onSelectDestination, onBackdropChange, onNavigateT
     }, 1200);
   };
 
-  const handleSaveProfile = (e) => {
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [profileError, setProfileError] = useState("");
+
+  const handlePhotoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !user?.id) return;
+    if (file.size > 5 * 1024 * 1024) {
+      showToast("Please choose an image under 5MB");
+      return;
+    }
+    setIsUploadingPhoto(true);
+    setProfileError("");
+    try {
+      const url = await storageService.uploadProfilePhoto(user.id, file);
+      setEditForm((prev) => ({ ...prev, photoURL: url, avatar: url }));
+      showToast("Profile photo uploaded successfully! 📸");
+    } catch (err) {
+      console.warn("Photo upload error:", err);
+      showToast(err.message || "Failed to upload photo", "error");
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
+
+  const handleSaveProfile = async (e) => {
     e.preventDefault();
-    updateProfile(editForm);
-    setIsEditingProfile(false);
-    showToast("Profile changes saved successfully! ✓");
+    if (!editForm.name?.trim()) {
+      setProfileError("Full Name is required.");
+      return;
+    }
+    setIsSavingProfile(true);
+    setProfileError("");
+    try {
+      const res = await updateProfile(editForm);
+      if (res?.success !== false) {
+        setIsEditingProfile(false);
+        showToast("Profile changes saved successfully! ✓");
+      } else {
+        setProfileError(res?.message || "Failed to update profile.");
+        showToast(res?.message || "Failed to save profile", "error");
+      }
+    } catch (err) {
+      setProfileError(err.message || "Failed to update profile.");
+      showToast(err.message || "Failed to save profile", "error");
+    } finally {
+      setIsSavingProfile(false);
+    }
   };
 
   const allIndianStates = getAllStates();
@@ -537,9 +581,9 @@ export const UserProfile = ({ onSelectDestination, onBackdropChange, onNavigateT
         }}
       >
         {[
-          { label: "Total Bookings", value: user.stats?.totalBookings || 12, icon: Ticket, color: "#2563EB" },
-          { label: "Completed Trips", value: user.stats?.completedTrips || 10, icon: CheckCircle, color: "#16A34A" },
-          { label: "Saved Destinations", value: bookmarkedDestinations.length || 6, icon: Bookmark, color: "#EA580C" },
+          { label: "Total Bookings", value: bookedTickets?.length ?? user.stats?.totalBookings ?? 0, icon: Ticket, color: "#2563EB" },
+          { label: "Trips Planned", value: savedTrips?.length ?? user.stats?.completedTrips ?? 0, icon: CheckCircle, color: "#16A34A" },
+          { label: "Saved Destinations", value: bookmarkedIds?.length || 0, icon: Bookmark, color: "#EA580C" },
           { label: "INAVIST Reward Points", value: `${totalPoints.toLocaleString("en-IN")} Pts`, icon: Sparkles, color: "#7C3AED" },
           { label: "Membership Tier", value: membershipTier || "Silver Traveller", icon: Award, color: "#D97706" }
         ].map((stat, i) => {
@@ -609,9 +653,54 @@ export const UserProfile = ({ onSelectDestination, onBackdropChange, onNavigateT
             <h2 style={{ fontSize: "1.35rem", fontWeight: 800, marginBottom: "6px" }}>
               Edit Traveler Profile
             </h2>
-            <p style={{ fontSize: "0.82rem", color: "var(--text-secondary)", marginBottom: "20px" }}>
-              Update your personal travel details and contact info.
+            <p style={{ fontSize: "0.82rem", color: "var(--text-secondary)", marginBottom: "16px" }}>
+              Update your personal travel details, contact info, and profile photo.
             </p>
+
+            {profileError && (
+              <div style={{ padding: "10px 14px", borderRadius: "8px", background: "rgba(220,38,38,0.12)", color: "#DC2626", fontSize: "0.8rem", marginBottom: "14px", border: "1px solid rgba(220,38,38,0.3)" }}>
+                {profileError}
+              </div>
+            )}
+
+            {/* Profile Avatar Upload Section */}
+            <div style={{ display: "flex", alignItems: "center", gap: "16px", marginBottom: "16px", padding: "12px", borderRadius: "12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-subtle)" }}>
+              <img
+                src={editForm.photoURL || editForm.avatar || user?.photoURL || user?.avatar || "/default-avatar.png"}
+                alt="Profile Preview"
+                style={{ width: "56px", height: "56px", borderRadius: "50%", objectFit: "cover", border: "2px solid var(--brand-primary, #2563EB)" }}
+              />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: "0.78rem", fontWeight: 700, marginBottom: "4px" }}>Profile Photo</div>
+                <label
+                  htmlFor="avatar-upload-file"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "6px 12px",
+                    borderRadius: "8px",
+                    background: "var(--brand-primary, #2563EB)",
+                    color: "#FFF",
+                    fontSize: "0.76rem",
+                    fontWeight: 700,
+                    cursor: isUploadingPhoto ? "not-allowed" : "pointer",
+                    opacity: isUploadingPhoto ? 0.7 : 1
+                  }}
+                >
+                  {isUploadingPhoto ? "Uploading..." : "Upload New Photo"}
+                </label>
+                <input
+                  id="avatar-upload-file"
+                  type="file"
+                  accept="image/*"
+                  onChange={handlePhotoUpload}
+                  disabled={isUploadingPhoto}
+                  style={{ display: "none" }}
+                />
+                <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginLeft: "8px" }}>JPG, PNG up to 5MB</span>
+              </div>
+            </div>
 
             <form onSubmit={handleSaveProfile} style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
               <div>
@@ -696,9 +785,14 @@ export const UserProfile = ({ onSelectDestination, onBackdropChange, onNavigateT
                 </div>
               )}
 
-              <button type="submit" className="btn-primary" style={{ width: "100%", height: "44px", marginTop: "8px" }}>
+              <button
+                type="submit"
+                className="btn-primary"
+                disabled={isSavingProfile || isUploadingPhoto}
+                style={{ width: "100%", height: "44px", marginTop: "8px", opacity: isSavingProfile ? 0.7 : 1 }}
+              >
                 <Save size={16} />
-                <span>Save Profile Changes</span>
+                <span>{isSavingProfile ? "Saving to Cloud..." : "Save Profile Changes"}</span>
               </button>
             </form>
           </div>

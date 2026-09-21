@@ -76,7 +76,8 @@ export const Sidebar = ({
   // Section 4: Account
   const accountItems = [
     { id: "profile", label: "Profile & Avatar", icon: User, badge: user?.isForeigner ? "e-Visa" : "Citizen" },
-    { id: "settings", label: "Settings & Themes", icon: Settings, badge: null }
+    { id: "settings", label: "Settings & Themes", icon: Settings, badge: null },
+    ...(user?.role === "admin" ? [{ id: "admin", label: "Admin Portal", icon: ShieldCheck, badge: "Admin", badgeColor: "#DC2626" }] : [])
   ];
 
   const renderSectionHeader = (title) => {

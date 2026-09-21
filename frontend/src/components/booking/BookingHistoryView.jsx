@@ -14,9 +14,14 @@ import {
   ShieldCheck,
   Sparkles,
   ChevronRight,
-  AlertCircle
+  AlertCircle,
+  X,
+  FileText
 } from "lucide-react";
 import { useTheme } from "../../context/ThemeContext";
+import { useAuth } from "../../context/AuthContext";
+import { usePlanner } from "../../context/PlannerContext";
+import { FirestoreService } from "../../services/FirestoreService";
 import { api } from "../../api/client";
 
 const SAMPLE_INITIAL_BOOKINGS = [
@@ -84,11 +89,67 @@ const SAMPLE_INITIAL_BOOKINGS = [
 
 export const BookingHistoryView = ({ onSelectDestination, onStartNewSearch }) => {
   const { isDark } = useTheme();
+  const { user } = useAuth();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   const [bookings, setBookings] = useState(() => {
     const saved = localStorage.getItem("inavist_all_bookings");
     return saved ? JSON.parse(saved) : SAMPLE_INITIAL_BOOKINGS;
   });
+
+  // Firestore Real-Time Bookings Subscription
+  useEffect(() => {
+    if (!user?.id) return;
+    setLoading(true);
+
+    const unsubscribe = FirestoreService.subscribeUserBookings(
+      user.id,
+      (cloudBookings) => {
+        setLoading(false);
+        if (cloudBookings && cloudBookings.length > 0) {
+          const normalized = cloudBookings.map((b) => ({
+            id: b.id,
+            bookingId: b.id ? `INV-${b.id.slice(-5).toUpperCase()}` : b.bookingId || "INV-CONF",
+            pnr: b.pnr || `PNR-${Math.floor(10000000 + Math.random() * 90000000)}`,
+            originCity: b.originCity || "Origin",
+            destinationCity: b.destinationCity || "Destination",
+            travelDate: b.travelDate || new Date().toISOString().split("T")[0],
+            type: b.type || "train",
+            operator: b.title || b.operator || "Indian Transit Network",
+            category: b.category || "Reserved Standard",
+            departureTime: b.departureTime || "08:00 AM",
+            arrivalTime: b.arrivalTime || "04:30 PM",
+            duration: b.duration || "8h 30m",
+            amount: b.pricing?.totalAmount || b.amount || 650,
+            paymentStatus: b.paymentDetails?.status || b.paymentStatus || "VERIFIED",
+            paymentMethod: b.paymentDetails?.method || b.paymentMethod || "UPI (Direct)",
+            rewardPointsEarned: b.rewardPointsEarned || Math.floor((b.amount || 650) * 0.08),
+            status: b.status || "Confirmed",
+            passengers: b.passengers || [{ name: user.name || "Traveller", age: 28, seatNumber: "Confirmed" }]
+          }));
+
+          setBookings((prev) => {
+            const cloudIds = new Set(normalized.map((nb) => nb.id));
+            const localOnly = prev.filter((b) => !cloudIds.has(b.id));
+            const merged = [...normalized, ...localOnly];
+            try {
+              localStorage.setItem("inavist_all_bookings", JSON.stringify(merged));
+            } catch (e) {}
+            return merged;
+          });
+        }
+      },
+      (err) => {
+        setLoading(false);
+        console.warn("Firestore bookings sync notice:", err);
+      }
+    );
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     api.bookings.getAll().then((res) => {
@@ -106,8 +167,28 @@ export const BookingHistoryView = ({ onSelectDestination, onStartNewSearch }) =>
     });
   }, []);
 
+  const { cancelBooking, showToast } = usePlanner();
   const [selectedBookingForModal, setSelectedBookingForModal] = useState(null);
   const [filterType, setFilterType] = useState("all");
+  const [cancellingId, setCancellingId] = useState(null);
+
+  const handleCancelBooking = async (bkg) => {
+    const bId = bkg.id || bkg.bookingId;
+    if (!window.confirm(`Are you sure you want to cancel booking #${bkg.bookingId || bId}?`)) {
+      return;
+    }
+    setCancellingId(bId);
+    try {
+      await cancelBooking(bId);
+      setBookings((prev) =>
+        prev.map((b) => (b.id === bId || b.bookingId === bId ? { ...b, status: "cancelled" } : b))
+      );
+    } catch (err) {
+      console.warn("Cancel booking error:", err);
+    } finally {
+      setCancellingId(null);
+    }
+  };
 
   const filteredBookings = bookings.filter(
     (b) => filterType === "all" || b.type === filterType || (filterType === "active" && b.status === "Confirmed")
@@ -235,6 +316,7 @@ export const BookingHistoryView = ({ onSelectDestination, onStartNewSearch }) =>
         ) : (
           filteredBookings.map((bkg) => {
             const Icon = getModeIcon(bkg.type);
+            const isCancelled = bkg.status?.toLowerCase() === "cancelled";
             return (
               <div
                 key={bkg.id || bkg.bookingId}
@@ -246,7 +328,8 @@ export const BookingHistoryView = ({ onSelectDestination, onStartNewSearch }) =>
                   display: "flex",
                   flexDirection: "column",
                   gap: "14px",
-                  background: isDark ? "rgba(0,0,0,0.25)" : "#FFFFFF"
+                  background: isDark ? "rgba(0,0,0,0.25)" : "#FFFFFF",
+                  opacity: isCancelled ? 0.7 : 1
                 }}
               >
                 {/* Top Strip */}
@@ -257,8 +340,8 @@ export const BookingHistoryView = ({ onSelectDestination, onStartNewSearch }) =>
                         width: "36px",
                         height: "36px",
                         borderRadius: "50%",
-                        background: "rgba(37, 99, 235, 0.15)",
-                        color: "#2563EB",
+                        background: isCancelled ? "rgba(220,38,38,0.15)" : "rgba(37, 99, 235, 0.15)",
+                        color: isCancelled ? "#DC2626" : "#2563EB",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center"
@@ -282,8 +365,16 @@ export const BookingHistoryView = ({ onSelectDestination, onStartNewSearch }) =>
                       style={{
                         padding: "3px 10px",
                         borderRadius: "var(--radius-full, 9999px)",
-                        background: bkg.status === "Confirmed" ? "rgba(22,163,74,0.15)" : "var(--bg-tertiary)",
-                        color: bkg.status === "Confirmed" ? "#16A34A" : "var(--text-muted)",
+                        background: isCancelled
+                          ? "rgba(220,38,38,0.15)"
+                          : bkg.status === "Confirmed"
+                          ? "rgba(22,163,74,0.15)"
+                          : "var(--bg-tertiary)",
+                        color: isCancelled
+                          ? "#DC2626"
+                          : bkg.status === "Confirmed"
+                          ? "#16A34A"
+                          : "var(--text-muted)",
                         fontSize: "0.74rem",
                         fontWeight: 800
                       }}
@@ -291,22 +382,24 @@ export const BookingHistoryView = ({ onSelectDestination, onStartNewSearch }) =>
                       {bkg.status}
                     </span>
 
-                    <span
-                      style={{
-                        padding: "3px 10px",
-                        borderRadius: "var(--radius-full, 9999px)",
-                        background: "rgba(234, 88, 12, 0.12)",
-                        color: "#EA580C",
-                        fontSize: "0.74rem",
-                        fontWeight: 800,
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: "4px"
-                      }}
-                    >
-                      <Sparkles size={11} />
-                      <span>+{bkg.rewardPointsEarned || 50} Points</span>
-                    </span>
+                    {!isCancelled && (
+                      <span
+                        style={{
+                          padding: "3px 10px",
+                          borderRadius: "var(--radius-full, 9999px)",
+                          background: "rgba(234, 88, 12, 0.12)",
+                          color: "#EA580C",
+                          fontSize: "0.74rem",
+                          fontWeight: 800,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "4px"
+                        }}
+                      >
+                        <Sparkles size={11} />
+                        <span>+{bkg.rewardPointsEarned || 50} Points</span>
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -332,7 +425,7 @@ export const BookingHistoryView = ({ onSelectDestination, onStartNewSearch }) =>
 
                   <div style={{ textAlign: "center" }}>
                     <span style={{ fontSize: "0.70rem", color: "var(--text-muted)", fontWeight: 700 }}>{bkg.duration || "4h 30m"}</span>
-                    <div style={{ width: "70px", height: "2px", background: "var(--brand-primary, #2563EB)", margin: "4px auto" }} />
+                    <div style={{ width: "70px", height: "2px", background: isCancelled ? "#DC2626" : "var(--brand-primary, #2563EB)", margin: "4px auto" }} />
                     <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>{bkg.travelDate}</span>
                   </div>
 
@@ -344,13 +437,55 @@ export const BookingHistoryView = ({ onSelectDestination, onStartNewSearch }) =>
                   </div>
                 </div>
 
-                {/* Bottom details & Download Action */}
+                {/* Bottom details & Download / Cancel Action */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px", paddingTop: "4px" }}>
                   <div style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
                     Amount Paid: <strong style={{ color: "#16A34A", fontSize: "0.96rem" }}>₹{bkg.amount}</strong> via {bkg.paymentMethod || "Verified UPI"}
                   </div>
 
                   <div style={{ display: "flex", gap: "8px" }}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedBookingForModal(bkg)}
+                      style={{
+                        padding: "7px 12px",
+                        borderRadius: "var(--radius-lg, 10px)",
+                        background: "var(--bg-tertiary)",
+                        border: "1px solid var(--border-subtle)",
+                        color: "var(--text-primary)",
+                        fontWeight: 700,
+                        fontSize: "0.78rem",
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "4px"
+                      }}
+                    >
+                      <FileText size={13} />
+                      <span>View Details</span>
+                    </button>
+
+                    {!isCancelled && (
+                      <button
+                        type="button"
+                        onClick={() => handleCancelBooking(bkg)}
+                        disabled={cancellingId === (bkg.id || bkg.bookingId)}
+                        style={{
+                          padding: "7px 12px",
+                          borderRadius: "var(--radius-lg, 10px)",
+                          background: "rgba(220,38,38,0.1)",
+                          border: "1px solid rgba(220,38,38,0.25)",
+                          color: "#DC2626",
+                          fontWeight: 700,
+                          fontSize: "0.78rem",
+                          cursor: cancellingId === (bkg.id || bkg.bookingId) ? "not-allowed" : "pointer",
+                          opacity: cancellingId === (bkg.id || bkg.bookingId) ? 0.6 : 1
+                        }}
+                      >
+                        {cancellingId === (bkg.id || bkg.bookingId) ? "Cancelling..." : "Cancel Booking"}
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={() => window.print()}
@@ -378,6 +513,91 @@ export const BookingHistoryView = ({ onSelectDestination, onStartNewSearch }) =>
           })
         )}
       </div>
+
+      {/* Booking Details Modal */}
+      {selectedBookingForModal && (
+        <div
+          className="modal-backdrop animate-fade-in"
+          onClick={() => setSelectedBookingForModal(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.6)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+            zIndex: 9999
+          }}
+        >
+          <div
+            className="glass-panel animate-scale-up"
+            style={{
+              width: "100%",
+              maxWidth: "540px",
+              background: "var(--bg-card-solid)",
+              padding: "28px",
+              borderRadius: "var(--radius-xl, 18px)",
+              position: "relative",
+              boxShadow: "var(--shadow-xl)"
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setSelectedBookingForModal(null)}
+              className="btn-ghost"
+              style={{ position: "absolute", top: "16px", right: "16px", padding: "6px" }}
+            >
+              <X size={20} />
+            </button>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "var(--brand-primary, #2563EB)", fontWeight: 800, fontSize: "0.78rem", textTransform: "uppercase", marginBottom: "6px" }}>
+              <Ticket size={16} /> Official Transit E-Ticket
+            </div>
+            <h2 style={{ fontSize: "1.35rem", fontWeight: 900, margin: "0 0 16px" }}>
+              Booking #{selectedBookingForModal.bookingId}
+            </h2>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px", fontSize: "0.86rem" }}>
+              <div style={{ padding: "12px", borderRadius: "10px", background: "var(--bg-tertiary)", display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: "var(--text-muted)" }}>PNR</span>
+                <strong>{selectedBookingForModal.pnr}</strong>
+              </div>
+              <div style={{ padding: "12px", borderRadius: "10px", background: "var(--bg-tertiary)", display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: "var(--text-muted)" }}>Operator / Carrier</span>
+                <strong>{selectedBookingForModal.operator}</strong>
+              </div>
+              <div style={{ padding: "12px", borderRadius: "10px", background: "var(--bg-tertiary)", display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: "var(--text-muted)" }}>Route</span>
+                <strong>{selectedBookingForModal.originCity} ➔ {selectedBookingForModal.destinationCity}</strong>
+              </div>
+              <div style={{ padding: "12px", borderRadius: "10px", background: "var(--bg-tertiary)", display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: "var(--text-muted)" }}>Travel Date</span>
+                <strong>{selectedBookingForModal.travelDate}</strong>
+              </div>
+              <div style={{ padding: "12px", borderRadius: "10px", background: "var(--bg-tertiary)", display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: "var(--text-muted)" }}>Status</span>
+                <strong style={{ color: selectedBookingForModal.status === "Confirmed" ? "#16A34A" : selectedBookingForModal.status === "cancelled" ? "#DC2626" : "var(--text-primary)" }}>
+                  {selectedBookingForModal.status}
+                </strong>
+              </div>
+              <div style={{ padding: "12px", borderRadius: "10px", background: "var(--bg-tertiary)", display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: "var(--text-muted)" }}>Total Paid</span>
+                <strong style={{ color: "#16A34A", fontSize: "1.1rem" }}>₹{selectedBookingForModal.amount}</strong>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setSelectedBookingForModal(null)}
+              className="btn-primary"
+              style={{ width: "100%", height: "42px", marginTop: "20px" }}
+            >
+              Close Ticket
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

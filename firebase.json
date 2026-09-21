@@ -12,5 +12,29 @@
         "destination": "/index.html"
       }
     ]
+  },
+  "auth": {
+    "authorizedDomains": [
+      "localhost",
+      "inavist.firebaseapp.com",
+      "inavist.web.app"
+    ],
+    "providers": {
+      "emailPassword": true,
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "INAVIST",
+        "supportEmail": "luckyrajasab@gmail.com"
+      }
+    }
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "dataconnect": {
+    "source": "dataconnect"
   }
 }

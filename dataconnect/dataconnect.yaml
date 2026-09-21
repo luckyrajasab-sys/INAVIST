@@ -1,0 +1,12 @@
+specVersion: "v1"
+serviceId: "inavist-service"
+location: "us-east4"
+schemaValidation: "COMPATIBLE"
+schema:
+  source: "./schema"
+  datasource:
+    postgresql:
+      database: "inavist-database"
+      cloudSql:
+        instanceId: "inavist-instance"
+connectorDirs: ["./connector"]

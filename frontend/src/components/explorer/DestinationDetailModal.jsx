@@ -22,18 +22,132 @@ import {
   Wifi,
   Coffee,
   Check,
-  ChevronRight
+  ChevronRight,
+  Send,
+  Trash2,
+  Edit3
 } from "lucide-react";
 import { ViewpointBadge, CrowdBadge, HiddenGemBadge } from "../common/Badge";
 import { usePlanner } from "../../context/PlannerContext";
+import { useAuth } from "../../context/AuthContext";
+import { FirestoreService } from "../../services/FirestoreService.js";
 
 export const DestinationDetailModal = ({ destination, onClose, onPlanTrip, onNavigateHotels, onNavigateTransport }) => {
   const { isBookmarked, toggleBookmark, isVisited, toggleVisited, showToast } = usePlanner();
-  const [activeTab, setActiveTab] = useState("overview"); // 'overview' | 'hotels' | 'transport'
+  const { user, isAuthenticated, openAuthModal } = useAuth();
+  const [activeTab, setActiveTab] = useState("overview"); // 'overview' | 'hotels' | 'transport' | 'reviews'
+
+  // Firestore Reviews State
+  const [reviews, setReviews] = useState([]);
+  const [newRating, setNewRating] = useState(5);
+  const [newComment, setNewComment] = useState("");
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const [editingReviewId, setEditingReviewId] = useState(null);
+  const [editRating, setEditRating] = useState(5);
+  const [editComment, setEditComment] = useState("");
+
+  // Firestore Favorites State
+  const [isFav, setIsFav] = useState(false);
+
+  // Subscribe to real-time reviews for this destination
+  React.useEffect(() => {
+    if (!destination?.id) return;
+    const unsub = FirestoreService.subscribeDestinationReviews(destination.id, (cloudReviews) => {
+      setReviews(cloudReviews);
+    });
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [destination?.id]);
+
+  // Check if destination is favorited in Firestore
+  React.useEffect(() => {
+    if (user?.id && destination?.id) {
+      FirestoreService.isFavorite(user.id, destination.id).then((fav) => {
+        setIsFav(fav);
+      });
+    }
+  }, [user?.id, destination?.id]);
+
+  const handleToggleFavorite = async () => {
+    if (!isAuthenticated || !user?.id) {
+      openAuthModal("signin");
+      showToast("Please sign in to save this destination to your favorites!", "info");
+      return;
+    }
+
+    try {
+      if (isFav) {
+        await FirestoreService.removeFavorite(user.id, destination.id);
+        setIsFav(false);
+        showToast("Removed from your favorites");
+      } else {
+        await FirestoreService.addFavorite(user.id, destination.id, destination);
+        setIsFav(true);
+        showToast("Saved to your favorites! ❤️");
+      }
+      toggleBookmark(destination.id);
+    } catch (err) {
+      showToast("Could not update favorite status", "error");
+    }
+  };
+
+  const handleCreateReview = async (e) => {
+    e.preventDefault();
+    if (!isAuthenticated || !user?.id) {
+      openAuthModal("signin");
+      showToast("Please sign in to write a review.", "info");
+      return;
+    }
+    if (!newComment.trim()) {
+      showToast("Please write a comment for your review.", "warning");
+      return;
+    }
+
+    setIsSubmittingReview(true);
+    try {
+      await FirestoreService.createReview(user.id, user, destination.id, {
+        rating: newRating,
+        comment: newComment.trim(),
+        visitMonth: new Date().toLocaleDateString("en-US", { month: "short", year: "numeric" })
+      });
+      setNewComment("");
+      setNewRating(5);
+      showToast("Review submitted successfully! 🌟");
+    } catch (err) {
+      showToast("Failed to post review: " + err.message, "error");
+    } finally {
+      setIsSubmittingReview(false);
+    }
+  };
+
+  const handleUpdateReview = async (reviewId) => {
+    if (!editComment.trim()) return;
+    try {
+      await FirestoreService.updateReview(user.id, reviewId, {
+        rating: editRating,
+        comment: editComment.trim()
+      });
+      setEditingReviewId(null);
+      showToast("Review updated successfully!");
+    } catch (err) {
+      showToast("Failed to update review: " + err.message, "error");
+    }
+  };
+
+  const handleDeleteReview = async (reviewId) => {
+    if (!window.confirm("Are you sure you want to delete your review?")) return;
+    try {
+      await FirestoreService.deleteReview(user.id, reviewId);
+      showToast("Review deleted successfully");
+    } catch (err) {
+      showToast("Failed to delete review: " + err.message, "error");
+    }
+  };
 
   if (!destination) return null;
 
-  const bookmarked = isBookmarked(destination.id);
+  const bookmarked = isFav || isBookmarked(destination.id);
   const visited = isVisited(destination.id);
 
   const approxTotalDay =
@@ -66,24 +180,38 @@ export const DestinationDetailModal = ({ destination, onClose, onPlanTrip, onNav
     },
     {
       id: `stay-${destination.id}-3`,
-      name: `Zostel / Backpacker Hub ${destination.name}`,
-      type: "Social Traveler Hostel",
+      name: `${destination.name} Backpackers Eco-Hostel & Homestay`,
+      type: "Budget & Backpackers",
       rating: 4.6,
-      price: Math.round(destination.estimatedCosts.stay * 0.45) || 750,
-      image: "https://images.unsplash.com/photo-1555854877-bab0e564b8d5?auto=format&fit=crop&w=600&q=80",
-      amenities: ["Dorm & Private", "High-Speed Wi-Fi", "Common Lounge", "Cafe"],
-      tag: "Solo / Backpackers"
+      pricePerNight: 750,
+      badge: "Budget Friendly",
+      amenities: ["Dorm / Private Beds", "Community Kitchen", "High-speed WiFi", "Bike Rental"],
+      contact: "+91 76543 21098",
+      bookingUrl: "#"
     }
   ];
 
   return (
-    <div className="modal-backdrop animate-fade-in" onClick={onClose}>
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 9999,
+        background: "rgba(0, 0, 0, 0.75)",
+        backdropFilter: "blur(6px)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "16px"
+      }}
+      onClick={onClose}
+    >
       <div
-        className="glass-panel animate-scale-up"
+        className="glass-card"
         style={{
           width: "100%",
-          maxWidth: "850px",
-          maxHeight: "92vh",
+          maxWidth: "860px",
+          maxHeight: "90vh",
           background: "var(--bg-card-solid)",
           borderRadius: "var(--radius-xl)",
           boxShadow: "var(--shadow-xl)",
@@ -159,7 +287,7 @@ export const DestinationDetailModal = ({ destination, onClose, onPlanTrip, onNav
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                 <Star size={15} color="#EA580C" fill="#EA580C" />
-                <span><strong>{destination.rating}</strong> ({destination.reviewsCount?.toLocaleString()} reviews)</span>
+                <span><strong>{averageRating}</strong> ({totalReviewsCount.toLocaleString()} reviews)</span>
               </div>
             </div>
           </div>
@@ -178,7 +306,8 @@ export const DestinationDetailModal = ({ destination, onClose, onPlanTrip, onNav
           {[
             { id: "overview", label: "Overview & Guide", icon: Compass },
             { id: "hotels", label: `Hotels & Stays (${sampleStays.length})`, icon: Building },
-            { id: "transport", label: "Transport & Reach", icon: Bus }
+            { id: "transport", label: "Transport & Reach", icon: Bus },
+            { id: "reviews", label: `Reviews (${reviews.length})`, icon: Star }
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -214,7 +343,7 @@ export const DestinationDetailModal = ({ destination, onClose, onPlanTrip, onNav
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px" }}>
             <div style={{ display: "flex", gap: "8px" }}>
               <button
-                onClick={() => toggleBookmark(destination.id)}
+                onClick={handleToggleFavorite}
                 style={{
                   padding: "8px 14px",
                   borderRadius: "var(--radius-md)",
@@ -230,7 +359,7 @@ export const DestinationDetailModal = ({ destination, onClose, onPlanTrip, onNav
                 }}
               >
                 <Bookmark size={15} fill={bookmarked ? "currentColor" : "none"} />
-                <span>{bookmarked ? "Saved in Bookmarks" : "Save Destination"}</span>
+                <span>{bookmarked ? "Saved in Favorites ✓" : "Add to Favorites"}</span>
               </button>
 
               <button
@@ -509,6 +638,278 @@ export const DestinationDetailModal = ({ destination, onClose, onPlanTrip, onNav
                     </span>
                   ))}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* 4. REVIEWS & RATINGS TAB */}
+          {activeTab === "reviews" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+              {/* Reviews Summary Header */}
+              <div
+                className="glass-card"
+                style={{
+                  padding: "18px 24px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  flexWrap: "wrap",
+                  gap: "14px",
+                  background: "var(--bg-tertiary)"
+                }}
+              >
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "2rem", fontWeight: 900, color: "#EA580C" }}>
+                      {destination.rating || "4.8"}
+                    </span>
+                    <div>
+                      <div style={{ display: "flex", gap: "2px" }}>
+                        {[1, 2, 3, 4, 5].map((s) => (
+                          <Star key={s} size={16} color="#EA580C" fill="#EA580C" />
+                        ))}
+                      </div>
+                      <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: "2px" }}>
+                        {reviews.length} Verified Community Reviews
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ fontSize: "0.82rem", color: "var(--text-secondary)" }}>
+                  All reviews synced live with Cloud Firestore
+                </div>
+              </div>
+
+              {/* Write a Review Section */}
+              <div
+                className="glass-card"
+                style={{
+                  padding: "20px",
+                  borderRadius: "var(--radius-lg)",
+                  border: "1px solid var(--border-subtle)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "14px"
+                }}
+              >
+                <h4 style={{ fontSize: "1rem", fontWeight: 800 }}>Leave a Verified Review</h4>
+                
+                {isAuthenticated ? (
+                  <form onSubmit={handleCreateReview} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                    <div>
+                      <label style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", display: "block", marginBottom: "6px" }}>
+                        Your Rating
+                      </label>
+                      <div style={{ display: "flex", gap: "6px" }}>
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <button
+                            key={star}
+                            type="button"
+                            onClick={() => setNewRating(star)}
+                            style={{
+                              background: "none",
+                              border: "none",
+                              cursor: "pointer",
+                              padding: "4px"
+                            }}
+                          >
+                            <Star
+                              size={22}
+                              color="#EA580C"
+                              fill={star <= newRating ? "#EA580C" : "none"}
+                            />
+                          </button>
+                        ))}
+                        <span style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)", marginLeft: "8px", alignSelf: "center" }}>
+                          {newRating} / 5 Stars
+                        </span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", display: "block", marginBottom: "6px" }}>
+                        Your Experience & Tips
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={newComment}
+                        onChange={(e) => setNewComment(e.target.value)}
+                        placeholder={`Share what you loved about ${destination.name}, best time to visit, or photography tips...`}
+                        style={{
+                          width: "100%",
+                          padding: "12px",
+                          borderRadius: "10px",
+                          border: "1px solid var(--border-subtle)",
+                          background: "var(--bg-tertiary)",
+                          color: "var(--text-primary)",
+                          fontSize: "0.88rem",
+                          resize: "vertical"
+                        }}
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isSubmittingReview || !newComment.trim()}
+                      className="btn-primary"
+                      style={{
+                        padding: "10px 20px",
+                        fontSize: "0.86rem",
+                        alignSelf: "flex-start",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px"
+                      }}
+                    >
+                      <Send size={15} />
+                      <span>{isSubmittingReview ? "Publishing to Firestore..." : "Publish Review"}</span>
+                    </button>
+                  </form>
+                ) : (
+                  <div style={{ padding: "14px", borderRadius: "10px", background: "var(--bg-tertiary)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
+                    <span style={{ fontSize: "0.84rem", color: "var(--text-secondary)" }}>
+                      Sign in with your INAVIST account to post reviews and rate places.
+                    </span>
+                    <button
+                      onClick={() => openAuthModal("signin")}
+                      className="btn-primary"
+                      style={{ padding: "8px 16px", fontSize: "0.82rem" }}
+                    >
+                      Sign In to Review
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Real-Time Reviews Feed List */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <h4 style={{ fontSize: "1rem", fontWeight: 800 }}>
+                  Traveler Reviews ({reviews.length})
+                </h4>
+
+                {reviews.length === 0 ? (
+                  <div className="glass-panel" style={{ padding: "32px", textAlign: "center", borderRadius: "var(--radius-lg)" }}>
+                    <p style={{ fontSize: "0.88rem", color: "var(--text-muted)" }}>
+                      No traveler reviews yet for {destination.name}. Be the first to share your journey!
+                    </p>
+                  </div>
+                ) : (
+                  reviews.map((rev) => (
+                    <div
+                      key={rev.id}
+                      className="glass-card"
+                      style={{
+                        padding: "16px",
+                        borderRadius: "var(--radius-lg)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "8px",
+                        borderLeft: rev.userId === user?.id ? "3px solid #2563EB" : "1px solid var(--border-subtle)"
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                          <img
+                            src={rev.userAvatar || "/default-avatar.png"}
+                            alt={rev.userName}
+                            style={{ width: "32px", height: "32px", borderRadius: "50%", objectFit: "cover" }}
+                            onError={(e) => { e.currentTarget.src = "/default-avatar.png"; }}
+                          />
+                          <div>
+                            <div style={{ fontWeight: 800, fontSize: "0.88rem", display: "flex", alignItems: "center", gap: "6px" }}>
+                              <span>{rev.userName}</span>
+                              {rev.userId === user?.id && (
+                                <span style={{ fontSize: "0.65rem", background: "rgba(37,99,235,0.15)", color: "#2563EB", padding: "2px 6px", borderRadius: "4px", fontWeight: 800 }}>
+                                  YOU
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: "0.70rem", color: "var(--text-muted)" }}>
+                              {rev.visitMonth || new Date(rev.createdAt).toLocaleDateString()}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <div style={{ display: "flex", gap: "2px" }}>
+                            {[1, 2, 3, 4, 5].map((s) => (
+                              <Star
+                                key={s}
+                                size={14}
+                                color="#EA580C"
+                                fill={s <= rev.rating ? "#EA580C" : "none"}
+                              />
+                            ))}
+                          </div>
+
+                          {/* Edit / Delete actions for review owner */}
+                          {rev.userId === user?.id && (
+                            <div style={{ display: "flex", gap: "4px", marginLeft: "6px" }}>
+                              <button
+                                onClick={() => {
+                                  setEditingReviewId(rev.id);
+                                  setEditRating(rev.rating);
+                                  setEditComment(rev.comment);
+                                }}
+                                style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "4px" }}
+                                title="Edit review"
+                              >
+                                <Edit3 size={14} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteReview(rev.id)}
+                                style={{ background: "none", border: "none", color: "#DC2626", cursor: "pointer", padding: "4px" }}
+                                title="Delete review"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {editingReviewId === rev.id ? (
+                        <div style={{ marginTop: "6px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                          <textarea
+                            value={editComment}
+                            onChange={(e) => setEditComment(e.target.value)}
+                            rows={2}
+                            style={{
+                              width: "100%",
+                              padding: "8px",
+                              borderRadius: "8px",
+                              border: "1px solid var(--border-subtle)",
+                              background: "var(--bg-tertiary)",
+                              color: "var(--text-primary)",
+                              fontSize: "0.85rem"
+                            }}
+                          />
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <button
+                              onClick={() => handleUpdateReview(rev.id)}
+                              className="btn-primary"
+                              style={{ padding: "6px 14px", fontSize: "0.78rem" }}
+                            >
+                              Save
+                            </button>
+                            <button
+                              onClick={() => setEditingReviewId(null)}
+                              className="btn-secondary"
+                              style={{ padding: "6px 14px", fontSize: "0.78rem" }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <p style={{ fontSize: "0.86rem", color: "var(--text-secondary)", lineHeight: 1.5, margin: "2px 0 0" }}>
+                          {rev.comment}
+                        </p>
+                      )}
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           )}

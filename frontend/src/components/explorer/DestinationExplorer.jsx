@@ -31,6 +31,7 @@ import { useLanguage } from "../../context/LanguageContext";
 import { useTheme } from "../../context/ThemeContext";
 import { getCapitalForState, ALL_INDIAN_STATES_DIRECTORY, getAllIndianDistricts } from "../../data/stateCapitalsAndDistricts.js";
 import { api } from "../../api/client";
+import { FirestoreService } from "../../services/FirestoreService.js";
 
 // Curated iconic image representations for Indian States featuring sacred temples, idols & heritage
 export const STATE_REPRESENTATIONS = [
@@ -66,16 +67,35 @@ export const DestinationExplorer = ({ onSelectDestination, onBackdropChange, onP
   const [sortBy, setSortBy] = useState("rating");
   const [selectedGemModal, setSelectedGemModal] = useState(null);
   const [savedGems, setSavedGems] = useState({});
-  const [destList, setDestList] = useState(destinationsData);
+  const [destList, setDestList] = useState([]);
+  const [isDestLoading, setIsDestLoading] = useState(true);
+  const [destError, setDestError] = useState(null);
 
   useEffect(() => {
-    api.destinations.getAll({ limit: 250 }).then((res) => {
-      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
-        setDestList(res.data);
-      }
-    }).catch((err) => {
-      console.warn("Could not load live destinations from backend, using local dataset:", err);
-    });
+    let isMounted = true;
+    setIsDestLoading(true);
+    setDestError(null);
+
+    FirestoreService.getDestinations()
+      .then((data) => {
+        if (!isMounted) return;
+        if (Array.isArray(data) && data.length > 0) {
+          setDestList(data);
+        } else {
+          setDestList(destinationsData);
+        }
+        setIsDestLoading(false);
+      })
+      .catch((err) => {
+        if (!isMounted) return;
+        console.warn("[Explorer] Firestore fetch error, falling back to local catalog:", err.message);
+        setDestList(destinationsData);
+        setIsDestLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const allStates = useMemo(() => getAllStates(), []);
@@ -1181,7 +1201,31 @@ export const DestinationExplorer = ({ onSelectDestination, onBackdropChange, onP
       </div>
 
       {/* Destination Cards Grid */}
-      {filteredDestinations.length === 0 ? (
+      {isDestLoading ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "20px" }}>
+          {[1, 2, 3, 4, 5, 6].map((sk) => (
+            <div
+              key={sk}
+              className="glass-card"
+              style={{
+                height: "340px",
+                borderRadius: "var(--radius-xl)",
+                background: "var(--bg-tertiary)",
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden"
+              }}
+            >
+              <div style={{ height: "180px", background: "rgba(255,255,255,0.05)" }} />
+              <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "10px", flex: 1 }}>
+                <div style={{ height: "18px", width: "70%", background: "rgba(255,255,255,0.08)", borderRadius: "4px" }} />
+                <div style={{ height: "12px", width: "45%", background: "rgba(255,255,255,0.05)", borderRadius: "4px" }} />
+                <div style={{ height: "12px", width: "90%", background: "rgba(255,255,255,0.05)", borderRadius: "4px", marginTop: "auto" }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : filteredDestinations.length === 0 ? (
         <div className="glass-panel" style={{ padding: "48px", textAlign: "center", borderRadius: "var(--radius-xl)" }}>
           <Compass size={40} color="var(--text-muted)" style={{ margin: "0 auto 12px" }} />
           <h3 style={{ fontSize: "1.2rem", fontWeight: 800 }}>No destinations found</h3>
