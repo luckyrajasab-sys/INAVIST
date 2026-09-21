@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "default": "inavist",
+    "staging": "inavist"
+  },
+  "targets": {},
+  "etags": {}
+}
