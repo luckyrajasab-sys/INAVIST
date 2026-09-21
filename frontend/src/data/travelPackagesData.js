@@ -136,3 +136,6 @@ export const getPackagesForDestination = (destinationName = "Goa") => {
   );
   return matched.length > 0 ? matched : TRAVEL_PACKAGES_DATA.slice(0, 3);
 };
+
+export const travelPackages = TRAVEL_PACKAGES_DATA;
+

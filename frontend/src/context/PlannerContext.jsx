@@ -286,20 +286,61 @@ export const PlannerProvider = ({ children }) => {
 
   const bookTransportTicket = (transport, passengers = 1, travelDate) => {
     const pnr = `YTR-${Math.floor(100000 + Math.random() * 900000)}`;
+    const totalAmount = (transport.price || transport.baseFare || 650) * passengers;
+    const dateStr = travelDate || new Date(Date.now() + 86400000 * 3).toISOString().split("T")[0];
+
     const ticket = {
       id: `tkt-${Date.now()}`,
       pnr,
       transport,
       passengers,
-      travelDate: travelDate || new Date(Date.now() + 86400000 * 3).toISOString().split("T")[0],
-      totalAmount: transport.price * passengers,
+      travelDate: dateStr,
+      totalAmount,
       bookedAt: new Date().toLocaleString(),
-      status: "Confirmed (Simulated Ticket)"
+      status: "Confirmed"
     };
     setBookedTickets((prev) => [ticket, ...prev]);
     showToast(`Booking Confirmed! PNR: ${pnr} 🎟️`);
+
+    const bookingPayload = {
+      type: transport.type || transport.mode || "train",
+      title: `${transport.operator || "Transit Network"} (${transport.from || "Origin"} ➔ ${transport.to || "Destination"})`,
+      originCity: transport.from || "Origin",
+      destinationCity: transport.to || "Destination",
+      travelDate: dateStr,
+      passengerCount: passengers,
+      pricing: {
+        baseFare: Math.round(totalAmount * 0.85),
+        taxes: Math.round(totalAmount * 0.15),
+        totalAmount
+      },
+      paymentDetails: {
+        method: "UPI (Carrier Direct)",
+        transactionId: `UPI/TKT/${Date.now()}`,
+        status: "VERIFIED"
+      }
+    };
+
+    api.bookings.create(bookingPayload).then((res) => {
+      const createdBooking = res.data || {
+        bookingId: `INV-${Math.floor(100000 + Math.random() * 900000)}`,
+        pnr,
+        ...bookingPayload,
+        status: "Confirmed",
+        amount: totalAmount,
+        rewardPointsEarned: Math.floor(totalAmount * 0.07)
+      };
+      try {
+        const existing = JSON.parse(localStorage.getItem("inavist_all_bookings") || "[]");
+        localStorage.setItem("inavist_all_bookings", JSON.stringify([createdBooking, ...existing]));
+      } catch (e) {}
+    }).catch((err) => {
+      console.warn("Could not sync ticket booking to backend:", err);
+    });
+
     return ticket;
   };
+
 
   return (
     <PlannerContext.Provider

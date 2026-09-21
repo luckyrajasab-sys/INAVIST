@@ -1,8 +1,25 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Sparkles, ExternalLink, ShieldCheck, CheckCircle2, Bookmark, Info } from "lucide-react";
 import { seedGovTourism, seedTravelAlerts } from "../../data/seedData";
+import { api } from "../../api/client";
 
 export const GovTourismHub = () => {
+  const [schemes, setSchemes] = useState(seedGovTourism);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    api.govTourism.getSchemes().then((res) => {
+      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+        setSchemes(res.data);
+      }
+    }).catch((err) => {
+      console.warn("Could not fetch live schemes from backend:", err);
+    }).finally(() => {
+      setLoading(false);
+    });
+  }, []);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "28px", padding: "24px 20px" }}>
       {/* Header */}
@@ -45,11 +62,12 @@ export const GovTourismHub = () => {
       {/* Official Schemes Directory */}
       <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
         <h2 style={{ fontSize: "1.25rem", fontWeight: 800, letterSpacing: "-0.02em" }}>
-          Verified Central & State Initiatives ({seedGovTourism.length})
+          Verified Central & State Initiatives ({schemes.length})
         </h2>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "20px" }}>
-          {seedGovTourism.map((scheme) => (
+          {schemes.map((scheme) => (
+
             <div
               key={scheme.id}
               className="glass-card"

@@ -1,3 +1,5 @@
+import { getAuthToken } from "../api/client.js";
+
 const API_BASE = import.meta.env?.VITE_API_URL || "/api";
 
 export class PaymentService {
@@ -5,19 +7,25 @@ export class PaymentService {
    * Validate UPI ID
    */
   static async validateUPIId(upiId) {
-    try {
-      const response = await fetch(`${API_BASE}/payments/validate-upi`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ upiId })
-      });
+    if (import.meta.env?.VITE_API_URL) {
+      try {
+        const token = getAuthToken();
+        const response = await fetch(`${API_BASE}/payments/validate-upi`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({ upiId })
+        });
 
-      if (response.ok) {
-        const json = await response.json();
-        return json.data;
+        if (response.ok) {
+          const json = await response.json();
+          return json.data;
+        }
+      } catch (err) {
+        // Fallback to client-side validation
       }
-    } catch (err) {
-      console.warn("Using offline UPI validation rule:", err.message);
     }
 
     // Client-side regex verification fallback
@@ -41,20 +49,27 @@ export class PaymentService {
    * Create UPI Intent & Dynamic QR Code payload
    */
   static async createUPIIntent({ bookingId, amount, customerName }) {
-    try {
-      const response = await fetch(`${API_BASE}/payments/create-intent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bookingId, amount, customerName })
-      });
+    if (import.meta.env?.VITE_API_URL) {
+      try {
+        const token = getAuthToken();
+        const response = await fetch(`${API_BASE}/payments/create-intent`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({ bookingId, amount, customerName })
+        });
 
-      if (response.ok) {
-        const json = await response.json();
-        return json.data;
+        if (response.ok) {
+          const json = await response.json();
+          return json.data;
+        }
+      } catch (err) {
+        // Fallback to local generator
       }
-    } catch (err) {
-      console.warn("Using local UPI intent generator:", err.message);
     }
+
 
     const merchantVPA = "inavist.travel@okhdfcbank";
     const merchantName = "INAVIST India Tourism";
@@ -88,11 +103,16 @@ export class PaymentService {
    */
   static async verifyUPIPayment({ bookingId, amount, upiId, transactionId }) {
     try {
+      const token = getAuthToken();
       const response = await fetch(`${API_BASE}/payments/verify`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({ bookingId, amount, upiId, transactionId })
       });
+
 
       if (response.ok) {
         const json = await response.json();

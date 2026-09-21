@@ -14,30 +14,32 @@ export class TravelSearchService {
     passengers = 1,
     travelPreference = "all"
   }) {
-    try {
-      const response = await fetch(`${API_BASE}/search/routes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fromCity,
-          toDestination,
-          travelDate,
-          passengers,
-          travelPreference
-        })
-      });
+    if (import.meta.env?.VITE_API_URL) {
+      try {
+        const response = await fetch(`${API_BASE}/search/routes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fromCity,
+            toDestination,
+            travelDate,
+            passengers,
+            travelPreference
+          })
+        });
 
-      if (response.ok) {
-        const json = await response.json();
-        if (json.success && json.data) {
-          return json.data;
+        if (response.ok) {
+          const json = await response.json();
+          if (json.success && json.data) {
+            return json.data;
+          }
         }
+      } catch (err) {
+        // Fallback to local calculation engine
       }
-    } catch (err) {
-      console.warn("Backend API unreachable for search, utilizing local calculation engine:", err.message);
     }
 
-    // High-fidelity fallback calculation engine
+    // High-fidelity local calculation engine
     return this.generateLocalRouteResults({
       fromCity,
       toDestination,

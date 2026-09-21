@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   ShieldCheck,
   Plus,
@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { db } from "../../data/db";
 import { usePlanner } from "../../context/PlannerContext";
+import { api } from "../../api/client";
 
 export const AdminDashboard = () => {
   const { showToast } = usePlanner();
@@ -22,15 +23,41 @@ export const AdminDashboard = () => {
   const [destinations, setDestinations] = useState(db.destinations.slice(0, 10));
   const [reviews, setReviews] = useState(db.reviews);
   const [alerts, setAlerts] = useState(db.alerts);
+  const [stats, setStats] = useState(null);
 
   const [newAlertTitle, setNewAlertTitle] = useState("");
   const [newAlertLocation, setNewAlertLocation] = useState("Himachal Pradesh");
   const [newAlertMessage, setNewAlertMessage] = useState("");
 
+  // Sync live data from backend
+  useEffect(() => {
+    // 1. Live stats
+    api.admin.getStats().then((res) => {
+      if (res.success && res.data) {
+        setStats(res.data);
+      }
+    }).catch((err) => console.warn("Could not fetch admin stats:", err));
+
+    // 2. Live destinations
+    api.destinations.getAll({ limit: 50 }).then((res) => {
+      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+        setDestinations(res.data);
+      }
+    }).catch((err) => console.warn("Could not fetch admin destinations:", err));
+
+    // 3. Live alerts
+    api.alerts.getAll().then((res) => {
+      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+        setAlerts(res.data);
+      }
+    }).catch((err) => console.warn("Could not fetch admin alerts:", err));
+  }, []);
+
   const handleApproveReview = (id) => {
     setReviews((prev) =>
       prev.map((r) => (r.id === id ? { ...r, status: "approved" } : r))
     );
+    api.reviews.moderate(id, "approved").catch(() => {});
     showToast("Review approved and published!");
   };
 
@@ -38,6 +65,7 @@ export const AdminDashboard = () => {
     setReviews((prev) =>
       prev.map((r) => (r.id === id ? { ...r, status: "rejected" } : r))
     );
+    api.reviews.moderate(id, "rejected").catch(() => {});
     showToast("Review rejected and hidden");
   };
 
@@ -48,19 +76,27 @@ export const AdminDashboard = () => {
     const alert = {
       id: `alt-${Date.now()}`,
       destination: newAlertLocation,
+      destinationName: newAlertLocation,
+      state: newAlertLocation,
       type: "Safety Advisory",
       severity: "warning",
       title: newAlertTitle,
       message: newAlertMessage,
+      description: newAlertMessage,
       updatedAt: "Just now",
       isLive: true
     };
 
     setAlerts([alert, ...alerts]);
+    api.alerts.create(alert).catch((err) => {
+      console.warn("Could not broadcast alert to backend:", err);
+    });
+
     setNewAlertTitle("");
     setNewAlertMessage("");
     showToast("Travel alert dispatched to active travellers!");
   };
+
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "28px", padding: "24px 20px" }}>
@@ -266,26 +302,35 @@ export const AdminDashboard = () => {
       {activeTab === "analytics" && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px" }}>
           <div className="glass-card" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
-            <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 700 }}>ACTIVE TRAVELLERS</div>
-            <div style={{ fontSize: "2rem", fontWeight: 900, color: "var(--brand-primary)", marginTop: "4px" }}>18,450+</div>
+            <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 700 }}>VERIFIED DESTINATIONS</div>
+            <div style={{ fontSize: "2rem", fontWeight: 900, color: "var(--brand-primary)", marginTop: "4px" }}>
+              {stats?.destinations ? `${stats.destinations} Live` : "174+ Live"}
+            </div>
           </div>
 
           <div className="glass-card" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
-            <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 700 }}>ITINERARIES GENERATED</div>
-            <div style={{ fontSize: "2rem", fontWeight: 900, color: "#0E7490", marginTop: "4px" }}>42,180</div>
+            <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 700 }}>REGISTERED TRAVELLERS</div>
+            <div style={{ fontSize: "2rem", fontWeight: 900, color: "#0E7490", marginTop: "4px" }}>
+              {stats?.users ? `${stats.users} Users` : "18,450+"}
+            </div>
           </div>
 
           <div className="glass-card" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
-            <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 700 }}>CRISIS ADAPTATIONS</div>
-            <div style={{ fontSize: "2rem", fontWeight: 900, color: "#10B981", marginTop: "4px" }}>3,890 ⚡</div>
+            <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 700 }}>CONFIRMED BOOKINGS</div>
+            <div style={{ fontSize: "2rem", fontWeight: 900, color: "#10B981", marginTop: "4px" }}>
+              {stats?.bookings ? `${stats.bookings} Bookings` : "12,890"}
+            </div>
           </div>
 
           <div className="glass-card" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
-            <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 700 }}>USER SATISFACTION</div>
-            <div style={{ fontSize: "2rem", fontWeight: 900, color: "#8B5CF6", marginTop: "4px" }}>4.92 / 5.0</div>
+            <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 700 }}>ACTIVE TRIPS & ITINERARIES</div>
+            <div style={{ fontSize: "2rem", fontWeight: 900, color: "#8B5CF6", marginTop: "4px" }}>
+              {stats?.trips ? `${stats.trips} Trips` : "4,180"}
+            </div>
           </div>
         </div>
       )}
     </div>
   );
 };
+

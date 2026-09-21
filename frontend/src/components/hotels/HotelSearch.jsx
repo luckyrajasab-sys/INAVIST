@@ -18,13 +18,18 @@ import {
 import { seedHotels } from "../../data/seedData";
 import { usePlanner } from "../../context/PlannerContext";
 import { useAuth } from "../../context/AuthContext";
+import { useRewards } from "../../context/RewardsContext";
 import { getAllStates } from "../../data/destinationsData";
+import { api } from "../../api/client";
+
 
 export const HotelSearch = () => {
   const { showToast } = usePlanner();
   const { isAuthenticated, openAuthModal, user } = useAuth();
+  const { addRewardPoints } = useRewards();
 
   // Multi-tier Search States
+
   const [selectedState, setSelectedState] = useState("all");
   const [selectedDistrict, setSelectedDistrict] = useState("all");
   const [selectedArea, setSelectedArea] = useState("");
@@ -149,7 +154,51 @@ export const HotelSearch = () => {
       origin: { y: 0.6 }
     });
     showToast(`Reservation Confirmed at ${selectedHotel.name}! 🏨`);
+
+    const totalAmount = Math.round(selectedRoom?.price * nights * 1.18 - selectedHotel.discount * nights);
+    const bookingPayload = {
+      type: "hotel",
+      title: `${selectedHotel.name} (${selectedRoom?.type})`,
+      originCity: selectedHotel.city || selectedHotel.state,
+      destinationCity: selectedHotel.city || selectedHotel.state,
+      travelDate: new Date(Date.now() + 86400000 * 5).toISOString().split("T")[0],
+      passengerCount: guests,
+      pricing: {
+        baseFare: selectedRoom?.price * nights,
+        taxes: Math.round(selectedRoom?.price * nights * 0.18),
+        discountAmount: selectedHotel.discount * nights,
+        totalAmount
+      },
+      paymentDetails: {
+        method: "UPI (Verified Hotel Stay)",
+        transactionId: `UPI/HTL/${Date.now()}`,
+        status: "VERIFIED"
+      }
+    };
+
+    api.bookings.create(bookingPayload).then((res) => {
+      const createdBooking = res.data || {
+        bookingId: `INV-${Math.floor(100000 + Math.random() * 900000)}`,
+        pnr: `HTL-${Math.floor(10000000 + Math.random() * 90000000)}`,
+        ...bookingPayload,
+        status: "Confirmed",
+        rewardPointsEarned: Math.floor(totalAmount * 0.08)
+      };
+      try {
+        const existing = JSON.parse(localStorage.getItem("inavist_all_bookings") || "[]");
+        localStorage.setItem("inavist_all_bookings", JSON.stringify([createdBooking, ...existing]));
+      } catch (e) {}
+
+      addRewardPoints?.({
+        points: Math.floor(totalAmount * 0.08),
+        bookingId: createdBooking.bookingId,
+        description: `Earned on stay at ${selectedHotel.name}`
+      });
+    }).catch((err) => {
+      console.warn("Could not record hotel booking to backend:", err);
+    });
   };
+
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "28px", padding: "24px 20px" }}>

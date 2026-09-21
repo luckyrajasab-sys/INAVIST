@@ -1,3 +1,5 @@
+import { getAuthToken } from "../api/client.js";
+
 const API_BASE = import.meta.env?.VITE_API_URL || "/api";
 
 export class RewardService {
@@ -5,17 +7,26 @@ export class RewardService {
    * Get Rewards Summary from API with localStorage fallback
    */
   static async getRewardsSummary() {
-    try {
-      const response = await fetch(`${API_BASE}/rewards`);
-      if (response.ok) {
-        const json = await response.json();
-        if (json.success && json.data) {
-          return json.data;
+    if (import.meta.env?.VITE_API_URL) {
+      try {
+        const token = getAuthToken();
+        const response = await fetch(`${API_BASE}/rewards`, {
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          }
+        });
+        if (response.ok) {
+          const json = await response.json();
+          if (json.success && json.data) {
+            return json.data;
+          }
         }
+      } catch (err) {
+        // Fallback to local rewards store
       }
-    } catch (err) {
-      console.warn("Using offline rewards store:", err.message);
     }
+
 
     const localData = localStorage.getItem("inavist_rewards_data");
     if (localData) {
@@ -115,11 +126,16 @@ export class RewardService {
    */
   static async redeemCoupon(couponCode) {
     try {
+      const token = getAuthToken();
       const response = await fetch(`${API_BASE}/rewards/redeem`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({ couponCode })
       });
+
 
       if (response.ok) {
         const json = await response.json();

@@ -289,6 +289,7 @@ const AppContent = () => {
           {activeTab === "profile" && (
             <UserProfile
               initialTab="idcard"
+              onNavigateTab={setActiveTab}
               onSelectDestination={handleSelectDestination}
               onBackdropChange={(img) => setActiveBackdropImg(img)}
             />
@@ -297,6 +298,7 @@ const AppContent = () => {
           {activeTab === "settings" && (
             <UserProfile
               initialTab="settings"
+              onNavigateTab={setActiveTab}
               onSelectDestination={handleSelectDestination}
               onBackdropChange={(img) => setActiveBackdropImg(img)}
             />

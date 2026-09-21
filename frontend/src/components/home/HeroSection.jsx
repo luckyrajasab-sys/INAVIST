@@ -37,10 +37,13 @@ import { BookingConfirmationModal } from "../booking/BookingConfirmationModal";
 import { SuddenTravelModal } from "../transport/SuddenTravelModal";
 import { TravelSearchService } from "../../services/TravelSearchService";
 import { BudgetService } from "../../services/BudgetService";
+import { api } from "../../api/client";
+import { useRewards } from "../../context/RewardsContext";
 
 export const HeroSection = ({ onNavigateTab, onSelectDestination, onStartPlan }) => {
   const { isDark } = useTheme();
   const { t } = useLanguage();
+  const { addRewardPoints } = useRewards();
 
   // Search Results View State
   const [searchResults, setSearchResults] = useState(null);
@@ -116,34 +119,107 @@ export const HeroSection = ({ onNavigateTab, onSelectDestination, onStartPlan })
     }
   };
 
-  const handleBookingSuccess = (confirmedData) => {
+  const handleBookingSuccess = async (confirmedData) => {
     setSelectedRouteForBooking(null);
     setConfirmedBookingData(confirmedData);
 
-    // Save to all bookings in localStorage
+    const bookingId = confirmedData.paymentReceipt?.bookingId || `INV-${Math.floor(100000 + Math.random() * 900000)}`;
+    const pnr = `PNR-${Math.floor(10000000 + Math.random() * 90000000)}`;
+    const fromCity = confirmedData.route?.fromLocation || confirmedData.route?.from || "Chennai";
+    const toCity = confirmedData.route?.toLocation || confirmedData.route?.to || "Goa";
+    const amount = confirmedData.pricing?.totalAmount || 1250;
+    const mode = (confirmedData.route?.mode || "train").toLowerCase();
+    const validMode = ["train", "bus", "flight", "cab", "hotel", "package"].includes(mode) ? mode : "train";
+    const pointsEarned = Math.max(50, Math.round(amount * 0.08));
+
+    // 1. Save to inavist_all_bookings in localStorage
     const localAll = localStorage.getItem("inavist_all_bookings");
     const existing = localAll ? JSON.parse(localAll) : [];
     const newRecord = {
       id: `bkg-${Date.now()}`,
-      bookingId: confirmedData.paymentReceipt?.bookingId || `INV-${Math.floor(100000 + Math.random() * 900000)}`,
-      pnr: `PNR-${Math.floor(10000000 + Math.random() * 90000000)}`,
-      originCity: confirmedData.route?.fromLocation || confirmedData.route?.from || "Chennai",
-      destinationCity: confirmedData.route?.toLocation || confirmedData.route?.to || "Goa",
+      bookingId,
+      pnr,
+      originCity: fromCity,
+      destinationCity: toCity,
       travelDate: confirmedData.travelDate,
-      type: confirmedData.route?.mode || "train",
-      operator: confirmedData.route?.operator || confirmedData.route?.title,
-      category: confirmedData.selectedClass || confirmedData.route?.category,
+      type: validMode,
+      operator: confirmedData.route?.operator || confirmedData.route?.title || "IRCTC Express",
+      category: confirmedData.selectedClass || confirmedData.route?.category || "Standard",
       departureTime: confirmedData.route?.departureTime || "06:30 AM",
       arrivalTime: confirmedData.route?.arrivalTime || "01:00 PM",
       duration: confirmedData.route?.duration || "6h 30m",
-      amount: confirmedData.pricing?.totalAmount || 1250,
+      amount,
       paymentStatus: "VERIFIED",
       paymentMethod: confirmedData.paymentReceipt?.paidVia || "UPI",
-      rewardPointsEarned: Math.max(50, Math.round((confirmedData.pricing?.totalAmount || 1250) * 0.08)),
+      rewardPointsEarned: pointsEarned,
       status: "Confirmed",
-      passengers: confirmedData.passengers
+      passengers: confirmedData.passengers || []
     };
     localStorage.setItem("inavist_all_bookings", JSON.stringify([newRecord, ...existing]));
+
+    // 2. Save transaction to inavist_recent_transactions
+    try {
+      const localTxns = localStorage.getItem("inavist_recent_transactions");
+      const existingTxns = localTxns ? JSON.parse(localTxns) : [];
+      const txnRecord = {
+        id: confirmedData.paymentReceipt?.transactionId || `UPI/INV/2026/${Math.floor(100000000 + Math.random() * 900000000)}`,
+        bookingId,
+        serviceName: `${newRecord.operator} (${fromCity} → ${toCity})`,
+        amount,
+        paidVia: confirmedData.paymentReceipt?.paidVia || "UPI Fast Checkout",
+        status: "SUCCESS",
+        paidAt: new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }),
+        bankRef: `HDFC-UPI-${Math.floor(10000000 + Math.random() * 90000000)}`
+      };
+      localStorage.setItem("inavist_recent_transactions", JSON.stringify([txnRecord, ...existingTxns]));
+    } catch (e) {
+      console.warn("Could not save to inavist_recent_transactions:", e);
+    }
+
+    // 3. Reward points
+    try {
+      if (addRewardPoints) {
+        addRewardPoints(pointsEarned, `Ticket Booking: ${fromCity} to ${toCity}`);
+      }
+    } catch (e) {
+      console.warn("Points credit warning:", e);
+    }
+
+    // 4. Sync to backend API if authenticated
+    try {
+      await api.bookings.create({
+        type: validMode,
+        originCity: fromCity,
+        destinationCity: toCity,
+        travelDate: confirmedData.travelDate || new Date().toISOString(),
+        amount,
+        passengers: confirmedData.passengers?.map((p) => ({
+          name: p.name || "Passenger",
+          age: p.age || 28,
+          gender: p.gender || "Other",
+          seatNumber: p.seatNumber || "14A",
+          idNumber: p.idNumberMasked || "XXXX-XXXX-8921"
+        })) || [{ name: "Passenger", age: 28, gender: "Other" }],
+        sectors: [
+          {
+            mode: validMode,
+            from: fromCity,
+            to: toCity,
+            departureTime: new Date(),
+            arrivalTime: new Date(Date.now() + 6 * 3600000),
+            carrierName: newRecord.operator,
+            seatNumber: "14A"
+          }
+        ],
+        emergencyContact: {
+          name: "Family Emergency",
+          phone: "+91 98450 12345",
+          relationship: "Relative"
+        }
+      });
+    } catch (err) {
+      console.warn("Backend booking sync offline/fallback:", err.message);
+    }
   };
 
   const trendingDestinations = destinationsData.slice(0, 6);

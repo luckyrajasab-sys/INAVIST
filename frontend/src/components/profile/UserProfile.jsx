@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   User,
   ShieldCheck,
@@ -38,8 +38,11 @@ import {
   Users,
   Search,
   RefreshCw,
-  Navigation
+  Navigation,
+  Printer,
+  Zap
 } from "lucide-react";
+import { api } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
 import { useLanguage } from "../../context/LanguageContext";
 import { useTheme } from "../../context/ThemeContext";
@@ -92,7 +95,7 @@ const SAMPLE_PAYMENTS = [
   }
 ];
 
-export const UserProfile = ({ onSelectDestination, onBackdropChange, initialTab = "idcard" }) => {
+export const UserProfile = ({ onSelectDestination, onBackdropChange, onNavigateTab, initialTab = "idcard" }) => {
   const { user, isAuthenticated, logout, setIsAuthModalOpen, openAuthModal, updateProfile, updateRegisteredLocation } = useAuth();
   const { currentLang, languagesList, changeLanguage } = useLanguage();
   const { theme, toggleTheme, isDark, accentColor, changeAccentColor, ACCENT_PALETTES } = useTheme();
@@ -104,6 +107,99 @@ export const UserProfile = ({ onSelectDestination, onBackdropChange, initialTab 
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
+  const [selectedInvoice, setSelectedInvoice] = useState(null);
+
+  // Unified Payments & Invoices State
+  const [paymentsList, setPaymentsList] = useState([]);
+
+  // Load merged payments from backend API + localStorage + SAMPLE_PAYMENTS
+  useEffect(() => {
+    const loadUnifiedPayments = async () => {
+      let merged = [];
+
+      // 1. Read localStorage recent transactions
+      try {
+        const localTxns = localStorage.getItem("inavist_recent_transactions");
+        if (localTxns) {
+          const parsed = JSON.parse(localTxns);
+          parsed.forEach((t) => {
+            merged.push({
+              id: t.id || `TXN-${t.bookingId}`,
+              title: t.serviceName || `Booking #${t.bookingId}`,
+              category: "UPI Checkout",
+              amount: Number(t.amount) || 0,
+              date: t.paidAt || "Today",
+              status: "Completed",
+              method: t.paidVia || "UPI Instant",
+              invoiceNumber: `INV-${t.bookingId || "2026"}`,
+              bankRef: t.bankRef
+            });
+          });
+        }
+      } catch (e) {
+        console.warn("Error reading inavist_recent_transactions:", e);
+      }
+
+      // 2. Read localStorage all bookings
+      try {
+        const localBookings = localStorage.getItem("inavist_all_bookings");
+        if (localBookings) {
+          const parsed = JSON.parse(localBookings);
+          parsed.forEach((b) => {
+            if (!merged.find((m) => m.id === b.bookingId || m.invoiceNumber.includes(b.bookingId))) {
+              merged.push({
+                id: b.pnr || b.bookingId || `TXN-${Date.now()}`,
+                title: `${(b.type || "transit").toUpperCase()}: ${b.originCity || "Chennai"} to ${b.destinationCity || "Destination"}`,
+                category: b.type === "hotel" ? "Hotel Booking" : b.type === "cab" ? "Cab Ride" : "Transit Ticket",
+                amount: Number(b.amount) || 1200,
+                date: b.travelDate || "Confirmed",
+                status: b.status === "Confirmed" ? "Completed" : b.status || "Completed",
+                method: b.paymentMethod || "UPI",
+                invoiceNumber: `INV-${b.bookingId || b.pnr || "2026"}`
+              });
+            }
+          });
+        }
+      } catch (e) {
+        console.warn("Error reading inavist_all_bookings:", e);
+      }
+
+      // 3. Attempt to fetch live from backend API if available
+      try {
+        const res = await api.payments.getHistory();
+        if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
+          res.data.forEach((srv) => {
+            if (!merged.find((m) => m.id === srv.id)) {
+              merged.push({
+                id: srv.id,
+                title: srv.title,
+                category: srv.category,
+                amount: srv.amount,
+                date: srv.date,
+                status: srv.status === "SUCCESS" ? "Completed" : srv.status,
+                method: srv.method,
+                invoiceNumber: srv.invoiceNumber
+              });
+            }
+          });
+        }
+      } catch (e) {
+        // graceful fallback to offline/local
+      }
+
+      // 4. Merge sample payments as baseline fallback
+      SAMPLE_PAYMENTS.forEach((sp) => {
+        if (!merged.find((m) => m.id === sp.id)) {
+          merged.push(sp);
+        }
+      });
+
+      setPaymentsList(merged);
+    };
+
+    loadUnifiedPayments();
+  }, [activeProfileTab]);
+
 
   // Edit Profile Form State
   const [editForm, setEditForm] = useState({
@@ -860,16 +956,37 @@ export const UserProfile = ({ onSelectDestination, onBackdropChange, initialTab 
                 View all your verified hotel bookings, train fares, offline pack licenses, and entry pass payments with downloadable GST invoices.
               </p>
             </div>
-            <div style={{ textAlign: "right" }}>
-              <span style={{ fontSize: "0.74rem", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>Total Spent</span>
-              <div style={{ fontSize: "1.3rem", fontWeight: 900, color: "var(--brand-saffron)" }}>
-                ₹{SAMPLE_PAYMENTS.reduce((acc, p) => acc + p.amount, 0).toLocaleString("en-IN")}
+            <div style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
+              {onNavigateTab && (
+                <button
+                  type="button"
+                  onClick={() => onNavigateTab("upi-payments")}
+                  className="btn-primary"
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: "var(--radius-full)",
+                    fontSize: "0.82rem",
+                    fontWeight: 800,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px"
+                  }}
+                >
+                  <Zap size={14} />
+                  <span>UPI Payment Center</span>
+                </button>
+              )}
+              <div style={{ textAlign: "right" }}>
+                <span style={{ fontSize: "0.74rem", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>Total Spent</span>
+                <div style={{ fontSize: "1.3rem", fontWeight: 900, color: "var(--brand-saffron)" }}>
+                  ₹{paymentsList.reduce((acc, p) => acc + (Number(p.amount) || 0), 0).toLocaleString("en-IN")}
+                </div>
               </div>
             </div>
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-            {SAMPLE_PAYMENTS.map((payment) => (
+            {paymentsList.map((payment) => (
               <div
                 key={payment.id}
                 className="glass-card"
@@ -897,17 +1014,17 @@ export const UserProfile = ({ onSelectDestination, onBackdropChange, initialTab 
 
                 <div style={{ textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px" }}>
                   <div style={{ fontSize: "1.15rem", fontWeight: 800, color: "var(--text-primary)" }}>
-                    ₹{payment.amount.toLocaleString("en-IN")}
+                    ₹{Number(payment.amount).toLocaleString("en-IN")}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                     <span style={{ fontSize: "0.72rem", color: "#16A34A", fontWeight: 700, background: "rgba(22, 163, 74, 0.12)", padding: "2px 8px", borderRadius: "var(--radius-full)" }}>
                       ✓ {payment.status}
                     </span>
                     <button
-                      onClick={() => showToast(`Downloading Invoice ${payment.invoiceNumber}...`)}
+                      onClick={() => setSelectedInvoice(payment)}
                       className="btn-ghost"
-                      style={{ padding: "4px 8px", fontSize: "0.74rem", gap: "4px", color: "var(--brand-saffron)" }}
-                      title="Download GST Invoice"
+                      style={{ padding: "4px 10px", fontSize: "0.74rem", gap: "4px", color: "var(--brand-saffron)", border: "1px solid var(--border-subtle)", borderRadius: "6px" }}
+                      title="View & Download GST Invoice"
                     >
                       <Download size={13} />
                       <span>Invoice</span>
@@ -917,6 +1034,153 @@ export const UserProfile = ({ onSelectDestination, onBackdropChange, initialTab 
               </div>
             ))}
           </div>
+
+          {/* GST TAX INVOICE MODAL */}
+          {selectedInvoice && (
+            <div
+              style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 9999,
+                background: "rgba(0, 0, 0, 0.75)",
+                backdropFilter: "blur(12px)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "16px"
+              }}
+              onClick={() => setSelectedInvoice(null)}
+            >
+              <div
+                className="glass-card"
+                style={{
+                  width: "100%",
+                  maxWidth: "520px",
+                  borderRadius: "var(--radius-2xl, 24px)",
+                  background: isDark
+                    ? "linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(10, 15, 29, 0.98) 100%)"
+                    : "#FFFFFF",
+                  border: "2px solid #16A34A",
+                  padding: "28px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "16px"
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <Receipt size={22} color="#16A34A" />
+                    <h3 style={{ fontFamily: "var(--font-heading)", fontSize: "1.25rem", fontWeight: 900, color: "var(--text-primary)", margin: 0 }}>
+                      Official Tax Invoice & Receipt
+                    </h3>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedInvoice(null)}
+                    style={{
+                      width: "32px",
+                      height: "32px",
+                      borderRadius: "50%",
+                      border: "1px solid var(--border-subtle)",
+                      background: "var(--bg-tertiary)",
+                      color: "var(--text-primary)",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center"
+                    }}
+                  >
+                    <X size={15} />
+                  </button>
+                </div>
+
+                <div style={{ borderBottom: "1px solid var(--border-subtle)", paddingBottom: "12px", display: "flex", justifyContent: "space-between", fontSize: "0.80rem" }}>
+                  <div>
+                    <strong style={{ color: "var(--text-primary)" }}>INAVIST India Tourism Pvt Ltd</strong>
+                    <div style={{ color: "var(--text-muted)", fontSize: "0.74rem" }}>GSTIN: 07AABCY8910M1Z2 • New Delhi</div>
+                  </div>
+                  <div style={{ textAlign: "right", color: "#16A34A", fontWeight: 800 }}>
+                    VERIFIED PAID ✓
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", fontSize: "0.82rem" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>Service / Item:</span>
+                    <strong style={{ color: "var(--text-primary)", maxWidth: "260px", textAlign: "right" }}>{selectedInvoice.title}</strong>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>Invoice Reference:</span>
+                    <span>{selectedInvoice.invoiceNumber}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>Transaction ID:</span>
+                    <span>{selectedInvoice.id}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>Payment Method:</span>
+                    <span>{selectedInvoice.method}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>Date of Payment:</span>
+                    <span>{selectedInvoice.date}</span>
+                  </div>
+                </div>
+
+                <div style={{ background: "var(--bg-tertiary)", padding: "12px 16px", borderRadius: "12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontWeight: 800, fontSize: "0.95rem" }}>Total Amount Paid (Incl. GST):</span>
+                  <span style={{ fontWeight: 900, fontSize: "1.3rem", color: "#16A34A" }}>
+                    ₹{Number(selectedInvoice.amount).toLocaleString("en-IN")}
+                  </span>
+                </div>
+
+                <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    style={{
+                      flex: 1,
+                      padding: "10px",
+                      borderRadius: "10px",
+                      background: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-subtle)",
+                      color: "var(--text-primary)",
+                      fontWeight: 800,
+                      fontSize: "0.85rem",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "6px"
+                    }}
+                  >
+                    <Printer size={15} />
+                    <span>Print Invoice</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedInvoice(null)}
+                    style={{
+                      flex: 1,
+                      padding: "10px",
+                      borderRadius: "10px",
+                      background: "var(--brand-primary, #2563EB)",
+                      color: "#FFFFFF",
+                      border: "none",
+                      fontWeight: 800,
+                      fontSize: "0.85rem",
+                      cursor: "pointer"
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

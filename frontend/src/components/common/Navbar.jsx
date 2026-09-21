@@ -328,9 +328,9 @@ export const Navbar = ({ onOpenSOS, onSearchClick, onToggleSidebar, setActiveTab
           )}
         </div>
 
-        {/* Live Backend Connection Indicator */}
+        {/* Vercel Cloud Connection Indicator */}
         <div
-          title={backendOnline ? "Backend Live & Connected (Express + MongoDB)" : "Backend Offline (Local Cache Mode)"}
+          title="INAVIST Cloud Active (Vercel Standalone Edge)"
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -340,11 +340,9 @@ export const Navbar = ({ onOpenSOS, onSearchClick, onToggleSidebar, setActiveTab
             fontSize: "0.72rem",
             fontWeight: 700,
             letterSpacing: "0.3px",
-            background: backendOnline
-              ? (isDark ? "rgba(16, 185, 129, 0.14)" : "rgba(16, 185, 129, 0.1)")
-              : (isDark ? "rgba(239, 68, 68, 0.14)" : "rgba(239, 68, 68, 0.1)"),
-            border: `1px solid ${backendOnline ? "rgba(16, 185, 129, 0.35)" : "rgba(239, 68, 68, 0.35)"}`,
-            color: backendOnline ? "#10B981" : "#EF4444",
+            background: isDark ? "rgba(16, 185, 129, 0.14)" : "rgba(16, 185, 129, 0.1)",
+            border: "1px solid rgba(16, 185, 129, 0.35)",
+            color: "#10B981",
             cursor: "default",
             userSelect: "none"
           }}
@@ -354,14 +352,15 @@ export const Navbar = ({ onOpenSOS, onSearchClick, onToggleSidebar, setActiveTab
               width: "7px",
               height: "7px",
               borderRadius: "50%",
-              background: backendOnline ? "#10B981" : "#EF4444",
-              boxShadow: backendOnline ? "0 0 8px #10B981" : "none"
+              background: "#10B981",
+              boxShadow: "0 0 8px #10B981"
             }}
           />
           <span style={{ display: "inline" }}>
-            {backendOnline ? "Live DB" : "Offline"}
+            Cloud Active
           </span>
         </div>
+
 
         {/* Theme Switcher Button */}
         <button

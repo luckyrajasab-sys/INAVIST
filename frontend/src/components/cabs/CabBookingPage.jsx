@@ -32,9 +32,12 @@ import {
 import { useTheme } from "../../context/ThemeContext";
 import { usePlanner } from "../../context/PlannerContext";
 import { useAuth } from "../../context/AuthContext";
+import { useRewards } from "../../context/RewardsContext";
+import { api } from "../../api/client";
 import { RouteService } from "../../services/RouteService.js";
 import { getCitySuggestions, verifyIndianCity } from "../../data/indianCitiesDirectory.js";
 import { CAB_DISTRICT_HUBS, getDistrictById, searchDistricts } from "../../data/cabDistrictPlaces.js";
+
 
 const CAB_FLEET_CATEGORIES = [
   {
@@ -105,8 +108,10 @@ export const CabBookingPage = ({ initialFromCity = "Chennai", initialToCity = "K
   const { isDark } = useTheme();
   const { showToast, emergencyContacts } = usePlanner();
   const { isAuthenticated, openAuthModal, user } = useAuth();
+  const { addRewardPoints } = useRewards();
 
   // Booking Type: 'outstation' | 'rental' | 'city' (Airport Transfer removed)
+
   const [tripType, setTripType] = useState("city"); // Default to Daily City Cab for instant local rides
   const [isRoundTrip, setIsRoundTrip] = useState(false);
 
@@ -249,6 +254,47 @@ export const CabBookingPage = ({ initialFromCity = "Chennai", initialToCity = "K
 
     setConfirmedBooking(booking);
 
+    const bookingPayload = {
+      type: "cab",
+      title: `Cab: ${pickupLocationText} → ${dropLocationText}`,
+      originCity: pickupCity || currentDistrict.districtName || "Chennai",
+      destinationCity: dropCity || currentDistrict.districtName || "Destination",
+      travelDate: pickupDate,
+      passengerCount,
+      pricing: {
+        baseFare: Math.round(totalFare * 0.82),
+        taxes: Math.round(totalFare * 0.18),
+        totalAmount: totalFare
+      },
+      paymentDetails: {
+        method: "UPI (Cab Chauffeur)",
+        transactionId: `UPI/CAB/${Date.now()}`,
+        status: "VERIFIED"
+      }
+    };
+
+    api.bookings.create(bookingPayload).then((res) => {
+      const createdBooking = res.data || {
+        ...booking,
+        ...bookingPayload,
+        status: "Confirmed",
+        amount: totalFare,
+        rewardPointsEarned: Math.floor(totalFare * 0.05)
+      };
+      try {
+        const existing = JSON.parse(localStorage.getItem("inavist_all_bookings") || "[]");
+        localStorage.setItem("inavist_all_bookings", JSON.stringify([createdBooking, ...existing]));
+      } catch (e) {}
+
+      addRewardPoints?.({
+        points: Math.floor(totalFare * 0.05),
+        bookingId: createdBooking.bookingId || booking.bookingId,
+        description: `Earned on Cab booking (${pickupLocationText} ➔ ${dropLocationText})`
+      });
+    }).catch((err) => {
+      console.warn("Could not save cab booking to backend:", err);
+    });
+
     confetti({
       particleCount: 75,
       spread: 70,
@@ -257,6 +303,7 @@ export const CabBookingPage = ({ initialFromCity = "Chennai", initialToCity = "K
 
     showToast?.(`Cab confirmed! Driver arriving in ${cab.eta} 🚖`);
   };
+
 
   const selectedCab = CAB_FLEET_CATEGORIES.find((c) => c.id === selectedCabId) || CAB_FLEET_CATEGORIES[1];
   const activeFare = calculateFare(selectedCab);
