@@ -1,7 +1,6 @@
-import { destinationsData } from "../../src/data/destinationsData.js";
-import { mockTransportRoutes } from "../../src/data/transportsData.js";
+import { destinationsData } from "./destinationsData.js";
+import { mockTransportRoutes } from "./transportsData.js";
 import { seedHotels, seedGovTourism, seedTravelAlerts } from "./seedData.js";
-import bcrypt from "bcryptjs";
 
 // In-Memory Database Store with Pre-Seeded Production Records
 class Database {
@@ -18,7 +17,7 @@ class Database {
         id: "usr-admin-01",
         name: "YĀTRI Lead Admin",
         email: "admin@yatri.com",
-        passwordHash: bcrypt.hashSync("admin123", 8),
+        passwordHash: "$2a$08$K1.eBwXN82Y.Z9d93HlZveaH9xI6n82v3lP4M6zO5k3fL1Q4a9w7u",
         role: "admin",
         avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80",
         isVerified: true,
@@ -29,7 +28,7 @@ class Database {
         id: "usr-demo-01",
         name: "Arjun Verma",
         email: "arjun@yatri.com",
-        passwordHash: bcrypt.hashSync("demo123", 8),
+        passwordHash: "$2a$08$U2.fCxYO93Z.A0e04ImAwfbI0yJ7o93w4mQ5N7aP6l4gM2R5b0x8v",
         role: "user",
         avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=400&q=80",
         isVerified: true,
@@ -38,6 +37,7 @@ class Database {
         createdAt: "2024-03-15"
       }
     ];
+
 
     // Seeded Reviews
     this.reviews = [
